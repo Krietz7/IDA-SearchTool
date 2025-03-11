@@ -1,8 +1,11 @@
+import bisect 
+
 import idc
 import idaapi
 import ida_ida
 import ida_nalt
-import ida_search
+import ida_lines
+import idautils
 import ida_bytes
 import ida_kernwin
 
@@ -34,31 +37,12 @@ class search_result:
 
 
 
-
-
-
-'''
-Data search configuration
-- Range: start, end
-- Keyword: keyword
-- Advanced Config: Fuzzy, Yara
-
-'''
-class data_search_config():
+class search_config_base():
     def __init__(self):
         self.start = -1
         self.end = -1
-        self.search_one = False
+        self.search_once = False
         self.current_addr = -1
-
-        self.keyword = None
-
-        self.search_direction = ida_bytes.BIN_SEARCH_FORWARD
-
-
-
-        self.is_fuzzy = False
-        self.is_yara = False
 
     def set_range(self, start:int, end:int):
         if start > end or start < ida_ida.inf_get_min_ea() or end > ida_ida.inf_get_max_ea():
@@ -73,12 +57,35 @@ class data_search_config():
     def set_search_once(self, current_addr:int, search_direction:int):
         if(current_addr >= ida_ida.inf_get_max_ea() or current_addr <= ida_ida.inf_get_min_ea()):
             return
-        self.search_one = True
+        self.search_once = True
         self.current_addr = current_addr
         self.search_direction = search_direction
 
     def get_range(self):
         return self.start, self.end
+
+    def get_current_addr(self):
+        return self.current_addr
+
+
+'''
+Data search configuration
+- Range: start, end
+- Keyword: keyword
+- Config: case sensitive, search direction,
+- Advanced Config: Fuzzy, Yara
+
+'''
+class data_search_config(search_config_base):
+    def __init__(self):
+        super().__init__()
+        self.keyword = None
+
+        self.search_direction = ida_bytes.BIN_SEARCH_FORWARD
+
+        self.is_fuzzy = False
+        self.is_yara = False
+
 
     def set_keyword(self, keyword: str):
         if not type(keyword) is str:
@@ -101,25 +108,46 @@ class data_search_config():
         return self.is_fuzzy, self.is_yara
 
 
+'''
+Symbol search configuration
+- Range: start, end
+- Keyword: keyword
+'''
+class comments_search_config(search_config_base):
+    def __init__(self):
+        super().__init__()
+        self.keyword = None
 
+    def set_keyword(self, keyword: str):
+        if not type(keyword) is str:
+            return
+        self.keyword = keyword
+
+    def get_keyword(self):
+        return self.keyword
+
+
+class names_search_config(search_config_base):
+    def __init__(self):
+        super().__init__()
+        self.keyword = None
+        self.is_search_comments = True
+        self.is_search_names = True
+
+    def set_keyword(self, keyword: str):
+        if not type(keyword) is str:
+            return
+        self.keyword = keyword
+
+    def get_keyword(self):
+        return self.keyword
 
 class SearchManager():
     def __init__(self):
         pass
 
-
-
-
-    def search_data(self, data_search_config):
-        is_fuzzy, is_yara = data_search_config.get_adv_config()
-
-        if not is_fuzzy and not is_yara:
-            return self.normal_bytes_search(data_search_config)
-
-
-        return []
-
-    def normal_bytes_search(self, data_search_config):
+    @classmethod
+    def bytes_search(cls,data_search_config):
         # keyword format: see ida_bytes.parse_binpat_str()
         start, end = data_search_config.get_range()
         keyword = data_search_config.get_keyword()
@@ -132,8 +160,8 @@ class SearchManager():
         if err:
             return []
             
-        current_addr = data_search_config.current_addr
-        if data_search_config.search_one and current_addr != -1:
+        current_addr = data_search_config.get_current_addr()
+        if data_search_config.search_once and current_addr != -1:
             if current_addr > end or current_addr < start:
                 return []
             elif data_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD:
@@ -148,26 +176,104 @@ class SearchManager():
 
         if start == -1 or end == -1:
             return []
-        addr = start
+        ea = start
         search_result_list = []
-        while addr < end:
-            addr = ida_bytes.bin_search(addr, end, patterns, flag)
-            if(addr == idaapi.BADADDR):
+        while ea < end:
+            ea = ida_bytes.bin_search(ea, end, patterns, flag)
+            if(ea == idaapi.BADADDR):
                 break
-            search_result_list.append(addr)
-            addr += 1
+            search_result_list.append(ea)
+            ea = idc.next_head(ea,end)
         return search_result_list
 
 
 
+    @classmethod
+    def comments_search(cls,comments_search_config):
+        start, end = comments_search_config.get_range()
+        keyword = comments_search_config.get_keyword()
+        if keyword is None or keyword == "":
+            return []
+    
+        def find_comment(line):
+            for cmt_type in [
+                    ida_lines.SCOLOR_REGCMT,
+                    ida_lines.SCOLOR_RPTCMT,
+                    ida_lines.SCOLOR_AUTOCMT]:
+                cmt_idx = line.find(ida_lines.SCOLOR_ON + cmt_type)
+                if cmt_idx > -1:
+                    return cmt_idx
+            return -1
+
+        current_addr = comments_search_config.get_current_addr()
+        if comments_search_config.search_once and current_addr != -1:
+            if current_addr > end or current_addr < start:
+                return []
+            step_function = ida_bytes.next_head if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else ida_bytes.prev_head
+            boundary_condition = lambda ea: ea < end if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else ea >= start
+
+            ea = current_addr
+            while boundary_condition(ea):
+                line = ida_lines.generate_disasm_line(ea)
+                cmt_idx = find_comment(line)
+                if cmt_idx != -1 and keyword in line[cmt_idx:]:
+                    return [ea]
+                ea = step_function(ea, end if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else start)
+            return []
+
+        search_result_list = []
+        ea = start
+        while ea < end:
+            line = ida_lines.generate_disasm_line(ea)
+            cmt_idx = find_comment(line)
+            if cmt_idx != -1:
+                if keyword in line[cmt_idx:]:
+                    search_result_list.append(ea)
+            ea = ida_bytes.next_head(ea, end)
+        return search_result_list
+
+    @classmethod
+    def names_search(cls, names_search_config):
+        start, end = names_search_config.get_range()
+        keyword = names_search_config.get_keyword()
+
+        if keyword is None or keyword == "":
+            return []
+
+        if names_search_config.search_once and names_search_config.current_addr != -1:
+            current_addr = names_search_config.current_addr
+            if current_addr > end or current_addr < start:
+                return []
+
+            addresses = sorted([address for address, name in idautils.Names() if keyword in name and address >= start and address <= end])
+            
+            index = bisect.bisect_left(addresses, current_addr)
+            if names_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD:
+                if index < len(addresses) and addresses[index] == current_addr:
+                    index += 1
+                if index < len(addresses):
+                    return [addresses[index]]
+            elif names_search_config.search_direction == ida_bytes.BIN_SEARCH_BACKWARD:
+                if index > 0 and addresses[index - 1] == current_addr:
+                    index -= 1
+                if index > 0:
+                    return [addresses[index - 1]]
+
+            return []
+
+        search_result_list = []
+        for address, name in idautils.Names():
+            if keyword in name and address >= start and address <= end:
+                search_result_list.append(address)
+        return search_result_list
 
 
 
 class SearchForm(idaapi.PluginForm):
     search_type = {
-        "All types": 0,
-        "Data": 1,
-        "Symbol": 2,
+        "Data": 0,
+        "Comments": 1,
+        "Names": 2,
         "Assembly Code": 3,
     }
     search_range_start = ida_ida.inf_get_min_ea()
@@ -376,19 +482,44 @@ class SearchForm(idaapi.PluginForm):
         print("Start Search")
         print(self.search_range_start,self.search_range_end)
 
-        search_manager = SearchManager()
-        search_config = data_search_config()
-        search_config.set_range(self.search_range_start, self.search_range_end)
-        if(model == 1):
-            search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
-        elif(model == 2):
-            search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
-        search_config.set_keyword(self.search_keyword_edit.toPlainText())
-        search_result = search_manager.search_data(search_config)
-        for i in search_result:
-            print(hex(i))
+        if(self.search_type_comboBox.currentIndex() == 0):
+            search_config = data_search_config()
+            search_config.set_range(self.search_range_start, self.search_range_end)
+            if(model == 1):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+            elif(model == 2):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+            search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_result = SearchManager().bytes_search(search_config)
+            for i in search_result:
+                print(hex(i))
+        elif(self.search_type_comboBox.currentIndex() == 1):
+            search_config = comments_search_config()
+            search_config.set_range(self.search_range_start, self.search_range_end)
+            if(model == 1):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+            elif(model == 2):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+            search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_result = SearchManager().comments_search(search_config)
+            for i in search_result:
+                print(hex(i))
+            
+        elif(self.search_type_comboBox.currentIndex() == 2):
+            search_config = names_search_config()
+            search_config.set_range(self.search_range_start, self.search_range_end)
+            if(model == 1):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+            elif(model == 2):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+            search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_result = SearchManager().names_search(search_config)
+            for i in search_result:
+                print(hex(i))
 
-
+        # self.search_result_box.clear()
+        # for i in search_result:
+        #     self.search_result_box.append(hex(i))
 
 
 
@@ -404,7 +535,7 @@ class DataSearch(idaapi.plugin_t):
     def __init__(self):
         super(DataSearch, self).__init__()
         self.name = "Search"
-        self.version = "0.1"
+        self.version = "0.2"
         self.description = "A plugin for searching data in IDA"
 
     def term(self):
