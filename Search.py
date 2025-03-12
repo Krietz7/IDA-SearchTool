@@ -1,5 +1,6 @@
 import bisect
 from calendar import c
+from math import e
 import re
 
 from sympy import N 
@@ -341,13 +342,11 @@ class SearchManager():
             elif assembly_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_BACKWARD:
                 while current_addr > start:
                     if find_code_snippet(current_addr, code_search_targets,end):
-                        print("found")
                         return [current_addr]
-                    print("current_addr:",current_addr)
                     
                     current_addr = ida_bytes.prev_head(current_addr, start)
                     if current_addr == idaapi.BADADDR or current_addr < start:
-                        print("Not found")
+
                         break
             return []
 
@@ -401,21 +400,20 @@ class SearchForm(idaapi.PluginForm):
         self.SearchConfigureBox.setMinimumWidth(750)
         SearchConfigureLayout = QtWidgets.QVBoxLayout()
 
-        '''Search Type Select'''
+        """Search Type Select"""
         search_type_box = QtWidgets.QGroupBox("Search Type:")
         search_type_box.setMaximumHeight(80)
         search_type_layout = QtWidgets.QVBoxLayout()
         
         self.search_type_comboBox = QtWidgets.QComboBox()
         self.search_type_comboBox.setMaximumWidth(160)
-        self.search_type_comboBox.currentIndexChanged.connect(self._on_search_type_changed)
         for key in self.search_type.keys():
             self.search_type_comboBox.addItem(key)
         search_type_layout.addWidget(self.search_type_comboBox)
         search_type_box.setLayout(search_type_layout)
         SearchConfigureLayout.addWidget(search_type_box)
 
-        '''Search Range Configure'''
+        """Search Range Configure"""
         search_range_box = QtWidgets.QGroupBox("Search Range:")
         search_range_box.setMaximumHeight(200)
         search_range_layout = QtWidgets.QVBoxLayout()
@@ -454,23 +452,49 @@ class SearchForm(idaapi.PluginForm):
         SearchConfigureLayout.addWidget(search_range_box)
 
 
-        '''Search Keyword Configure'''
-        search_keyword_box = QtWidgets.QGroupBox("Search Keyword:")
+        """Search Keyword Configure"""
+        '''str input box'''
+        self.search_keyword_box = QtWidgets.QGroupBox("Search Keyword:")
         search_keyword_layout = QtWidgets.QVBoxLayout()
         
         self.search_keyword_edit = QtWidgets.QTextEdit()
         search_keyword_layout.addWidget(self.search_keyword_edit)
 
-        search_keyword_box.setLayout(search_keyword_layout)
-        SearchConfigureLayout.addWidget(search_keyword_box)
+        self.search_keyword_box.setLayout(search_keyword_layout)
+        SearchConfigureLayout.addWidget(self.search_keyword_box)
+
+        '''code input box'''
+        self.search_code_box = QtWidgets.QGroupBox("Search Code:")
+        search_code_layout = QtWidgets.QVBoxLayout()
+
+        self.search_code_tree = QtWidgets.QTreeWidget()
+        self.search_code_tree.setHeaderLabels(["Instruction Mnemonic", "Operand 1", "Operand 2", "Operand 3"])
+        search_code_layout.addWidget(self.search_code_tree)
+
+        add_code_button_layout = QtWidgets.QHBoxLayout()
+        add_code_button_layout.addStretch(1)
+        self.add_code_button = QtWidgets.QPushButton("Add Code")
+        self.add_code_button.setMaximumWidth(300)
+        self.add_code_button.setMinimumWidth(200)
+        self.add_code_button.clicked.connect(self._add_code_line)
+        add_code_button_layout.addWidget(self.add_code_button)
+
+        self.clear_code_button = QtWidgets.QPushButton("Clear Code")
+        self.clear_code_button.setMaximumWidth(300)
+        self.clear_code_button.setMinimumWidth(200)
+        self.clear_code_button.clicked.connect(self.search_code_tree.clear)
+        add_code_button_layout.addWidget(self.clear_code_button)
 
 
 
+        add_code_button_layout.addStretch(1)
+        search_code_layout.addLayout(add_code_button_layout)
 
+        self.search_code_box.setLayout(search_code_layout)
+        SearchConfigureLayout.addWidget(self.search_code_box)
 
-
-        '''Configure'''
-        data_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
+        """Configure"""
+        self.data_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
         data_configure_layout = QtWidgets.QVBoxLayout()
 
 
@@ -484,10 +508,10 @@ class SearchForm(idaapi.PluginForm):
 
 
 
-        data_configure_box.setLayout(data_configure_layout)
-        SearchConfigureLayout.addWidget(data_configure_box)
+        self.data_configure_box.setLayout(data_configure_layout)
+        SearchConfigureLayout.addWidget(self.data_configure_box)
 
-        '''Search Start Button'''
+        """Search Start Button"""
 
         search_button_box = QtWidgets.QGroupBox()
         search_button_layout = QtWidgets.QHBoxLayout()
@@ -513,6 +537,10 @@ class SearchForm(idaapi.PluginForm):
         search_button_box.setLayout(search_button_layout)   
         SearchConfigureLayout.addWidget(search_button_box)
         SearchConfigureLayout.addStretch(1)
+
+        # connect select_type_comboBox to self._on_search_type_changed after initialization
+        self.search_type_comboBox.currentIndexChanged.connect(self._on_search_type_changed)
+        self._on_search_type_changed(0)
         self.SearchConfigureBox.setLayout(SearchConfigureLayout)
         return self.SearchConfigureBox
 
@@ -525,6 +553,16 @@ class SearchForm(idaapi.PluginForm):
     def _on_search_type_changed(self, index):
         current_text = self.search_type_comboBox.itemText(index)
         print(self.search_type[current_text])
+
+        if(self.search_type[current_text] == 0):
+            self.search_keyword_box.show()
+            self.data_configure_box.show()
+            self.search_code_box.hide()
+
+        elif(self.search_type[current_text] == 3):
+            self.search_keyword_box.hide()
+            self.data_configure_box.hide()
+            self.search_code_box.show()
 
 
     def _set_search_range(self, start: int = -1, end: int = -1):
@@ -568,13 +606,144 @@ class SearchForm(idaapi.PluginForm):
 
         self._set_search_range(target_segm.start_ea, target_segm.end_ea)
 
-    '''
+
+    def _add_code_line(self):
+        class add_code_form(idaapi.Form):
+            def __init__(self):
+                self.insn_mnen = ""
+                self.operand1 = ""
+                self.operand2 = ""
+                self.operand3 = ""
+                super(add_code_form, self).__init__(
+                r'''STARTITEM 0
+BUTTON YES* OK
+Search: Add code
+
+                {FormChangeCb}
+                <Input target code: {_target_code}>
+
+                Code part:
+                <##- insn_mnen  :{_insn_mnen}>
+                <##- operand1   :{_operand1}>
+                <##- operand2   :{_operand2}>
+                <##- operand3   :{_operand3}>
+                ''',
+                {
+                "FormChangeCb": self.FormChangeCb(self.OnFormChange),
+
+                "_target_code":self.StringInput(),
+
+                "_insn_mnen": self.StringInput(value = self.insn_mnen,swidth = 20),
+                "_operand1": self.StringInput(value = self.operand1,swidth = 20),
+                "_operand2": self.StringInput(value = self.operand2,swidth = 20),
+                "_operand3": self.StringInput(value = self.operand3,swidth = 20),
+                }
+                )
+                self.Compile()
+
+            def OnFormChange(self,fid):
+                if fid == self._target_code.id:
+                    target_code = self.GetControlValue(self._target_code)
+                    target_code = target_code.replace(' ', ',', 1)
+                    parts = target_code.split(',')
+                    while len(parts) < 4:
+                        parts.append("")
+
+                    self.SetControlValue(self._insn_mnen, parts[0])
+                    self.insn_mnen = parts[0]
+                    for i, part in enumerate(parts[1:4], start=1):
+                        if i < len(parts):
+                            self.SetControlValue(getattr(self, f'_operand{i}'), part.strip())
+                            if i == 1:
+                                self.operand1 = part;
+                            elif i == 2:
+                                self.operand2 = part;
+                            elif i == 3:
+                                self.operand3 = part;
+
+
+                elif fid in [self._insn_mnen.id, self._operand1.id, self._operand2.id, self._operand3.id]:
+                    input_code = ""
+                    insn_mnen = self.GetControlValue(self._insn_mnen).strip()
+                    operand1 = self.GetControlValue(self._operand1).strip()
+                    operand2 = self.GetControlValue(self._operand2).strip()
+                    operand3 = self.GetControlValue(self._operand3).strip()
+                    if operand3 != "":
+                        input_code = operand3
+                    if operand2 != "":
+                        input_code = operand2 + ", " + input_code
+                    elif operand2 == "" and input_code != "":
+                        input_code = "??" + ", " + input_code
+
+                    if operand1 != "":
+                        input_code = operand1 + ", " + input_code
+                    elif operand1 == "" and input_code != "":
+                        input_code = "??" + "," + input_code
+
+                    if insn_mnen != "":
+                        input_code = insn_mnen + " " + input_code
+                    elif insn_mnen == "" and input_code != "":
+                        input_code = "??" + " " + input_code
+                    self.SetControlValue(self._target_code, input_code)
+                    self.insn_mnen = insn_mnen
+                    self.operand1 = operand1
+                    self.operand2 = operand2
+                    self.operand3 = operand3
+                return 1
+
+            def get_assembly_code_line(self):
+                self.insn_mnen = self.insn_mnen.strip() if self.insn_mnen is not None else None
+                self.operand1 = self.operand1.strip() if self.operand1 is not None else None
+                self.operand2 = self.operand2.strip() if self.operand2 is not None else None
+                self.operand3 = self.operand3.strip() if self.operand3 is not None else None
+                return assembly_code_line(self.insn_mnen, self.operand1, self.operand2, self.operand3)
+
+             
+
+
+        form = add_code_form()
+        Is_add_code = form.Execute()
+        if Is_add_code:
+            asm_line = form.get_assembly_code_line()
+            item = QtWidgets.QTreeWidgetItem([
+                asm_line.insn_mnen,
+                asm_line.operand1,
+                asm_line.operand2,
+                asm_line.operand3
+            ])
+            self.search_code_tree.addTopLevelItem(item)
+        form.Free()
+
+
+
+    def extract_assembly_code_lines(self):
+        assembly_codes = []
+        for index in range(self.search_code_tree.topLevelItemCount()):
+            item = self.search_code_tree.topLevelItem(index)
+
+            insn_mnen = item.text(0)
+            operand1 = item.text(1)
+            operand2 = item.text(2)
+            operand3 = item.text(3)
+
+            asm_line = assembly_code_line(insn_mnen if insn_mnen else None,
+                                        operand1 if operand1 else None,
+                                        operand2 if operand2 else None,
+                                        operand3 if operand3 else None)
+            assembly_codes.append(asm_line)
+        
+        return assembly_codes
+
+
+
+
+    """
     Search Function
     model: int
     0: Search All
     1: Search Next
     2: Search Previous
-    '''
+    """
     def _start_search(self,model:int):
         self._set_search_range(-1,-1)
         print("Start Search")
@@ -616,6 +785,19 @@ class SearchForm(idaapi.PluginForm):
             for i in search_result:
                 print(hex(i))
 
+        elif(self.search_type_comboBox.currentIndex() == 3):
+            search_config = code_search_config()
+            search_config.set_range(self.search_range_start, self.search_range_end)
+            if(model == 1):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+            elif(model == 2):
+                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+            search_config.set_code_search_target(self.extract_assembly_code_lines())
+            search_result = SearchManager().assembly_code_search(search_config)
+            for i in search_result:
+                print(hex(i))
+
+
         # self.search_result_box.clear()
         # for i in search_result:
         #     self.search_result_box.append(hex(i))
@@ -653,16 +835,8 @@ class SearchTool(idaapi.plugin_t):
 #     return SearchTool()
 # idaapi.load_plugin("F:\\Projects\\IDA-Search\\Search.py")
 
-# form = SearchForm()
-# form.Show("Search")
+form = SearchForm()
+form.Show("Search")
 
 
 
-
-t = code_search_config()
-t.set_range(ida_ida.inf_get_min_ea(),ida_ida.inf_get_max_ea())
-t.set_code_search_target([assembly_code_line("mov","rax",None,None)])
-t.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
-result = SearchManager().assembly_code_search(t)
-for i in result:
-    print(hex(i))
