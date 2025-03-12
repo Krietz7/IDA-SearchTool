@@ -1,14 +1,8 @@
 import bisect
-from calendar import c
-from math import e
-import re
-
-from sympy import N 
 
 import idc
 import idaapi
 import ida_ida
-import ida_nalt
 import ida_lines
 import idautils
 import ida_bytes
@@ -26,16 +20,6 @@ try:
     pass
 except:
     yara = None
-
-
-class search_result:
-    def __init__(self):
-        self.start = None
-        self.end = None
-
-
-
-
 
 
 
@@ -96,7 +80,7 @@ class data_search_config(search_config_base):
         super().__init__()
         self.keyword = None
 
-        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE;
+        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE
         self.is_fuzzy = False
 
 
@@ -150,6 +134,69 @@ class names_search_config(search_config_base):
     def get_keyword(self):
         return self.keyword
 
+class search_result_base:
+    def __init__(self):
+        self.address = -1
+        self.type = -1
+        self.detail = None
+
+
+'''Search Result Type'''
+HEX_DATA = 1
+COMMENT = 2
+NAME = 3
+CODE = 4 
+
+type_str_dict = {
+    HEX_DATA : "address",
+    COMMENT : "Comment",
+    NAME : "Name",
+    CODE : "Code",
+}
+
+
+class search_result_base:
+    def __init__(self):
+        self.address = -1
+        self.type = -1
+        self.detail = None
+
+class hex_data_result(search_result_base):
+    def __init__(self, address:int, length:int):
+        self.address = address
+        self.type = HEX_DATA
+
+
+        disasm = idc.generate_disasm_line(address,0)
+        if(length <= 5):
+            data_byte = idc.get_bytes(address,length)
+            self.detail = ' '.join([f"{i:02X}" for i in bytearray(data_byte)]) + "... (" + disasm + ")"
+        else:
+            data_byte = idc.get_bytes(address,5)
+            self.detail = ' '.join([f"{i:02X}" for i in bytearray(data_byte)]) + "   (" + disasm + ")"
+
+class comment_result(search_result_base):
+    def __init__(self, address:int, comment:str):
+        self.address = address
+        self.type = COMMENT
+        self.detail = ''.join([char for char in comment if char.isprintable() and not char.isspace() or char == ' '])
+
+class name_result(search_result_base):
+    def __init__(self, address:int, name:str):
+        self.address = address
+        self.type = NAME
+        self.detail = name
+
+class code_result(search_result_base):
+    def __init__(self, address:int, code:str):
+        self.address = address
+        self.type = CODE
+        self.detail = code
+
+
+
+
+
 class assembly_code_line():
     def __init__(self, insn_mnen:str = None, operand1:str = None, operand2:str = None, operand3:str = None):
         self.insn_mnen = insn_mnen
@@ -200,7 +247,7 @@ class SearchManager():
             addr = ida_bytes.bin_search(start, end, patterns, flag)
             if(addr == idaapi.BADADDR):
                 return []
-            return [addr]
+            return [hex_data_result(addr, len(patterns))]
 
         if start == -1 or end == -1:
             return []
@@ -210,7 +257,7 @@ class SearchManager():
             ea = ida_bytes.bin_search(ea, end, patterns, flag)
             if(ea == idaapi.BADADDR):
                 break
-            search_result_list.append(ea)
+            search_result_list.append(hex_data_result(ea, len(patterns)))
             ea = idc.next_head(ea,end)
         return search_result_list
 
@@ -245,7 +292,7 @@ class SearchManager():
                 line = ida_lines.generate_disasm_line(ea)
                 cmt_idx = find_comment(line)
                 if cmt_idx != -1 and keyword in line[cmt_idx:]:
-                    return [ea]
+                    return [comment_result(ea, line[cmt_idx:])]
                 ea = step_function(ea, end if comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else start)
                 if ea == idaapi.BADADDR:
                     break
@@ -254,11 +301,11 @@ class SearchManager():
         search_result_list = []
         ea = start
         while ea < end:
-            line = ida_lines.generate_disasm_line(ea)
+            line = ida_lines.generate_disasm_line(ea,ida_lines.GENDSM_FORCE_CODE)
             cmt_idx = find_comment(line)
             if cmt_idx != -1:
                 if keyword in line[cmt_idx:]:
-                    search_result_list.append(ea)
+                    search_result_list.append(comment_result(ea, line[cmt_idx:]))
             ea = ida_bytes.next_head(ea, end)
             if ea == idaapi.BADADDR:
                 break
@@ -272,32 +319,36 @@ class SearchManager():
         if keyword is None or keyword == "":
             return []
 
+        addr_name_dict = sorted(
+            [(address, name) for address, name in idautils.Names() 
+             if keyword in name and start <= address <= end],
+            key=lambda x: x[0]
+        )
+
+        current_addr = names_search_config.get_current_addr()
+        search_direction = names_search_config.get_search_direction()
+
         if names_search_config.is_search_once():
-            current_addr = names_search_config.get_current_addr()
             if current_addr > end or current_addr < start or current_addr == -1:
                 return []
 
-            addresses = sorted([address for address, name in idautils.Names() if keyword in name and address >= start and address <= end])
-            
+            addresses = [item[0] for item in addr_name_dict]
             index = bisect.bisect_left(addresses, current_addr)
-            if names_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD:
+
+            if search_direction == ida_bytes.BIN_SEARCH_FORWARD:
                 if index < len(addresses) and addresses[index] == current_addr:
                     index += 1
                 if index < len(addresses):
-                    return [addresses[index]]
-            elif names_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_BACKWARD:
+                    return [name_result(addr_name_dict[index][0], addr_name_dict[index][1])]
+            elif search_direction == ida_bytes.BIN_SEARCH_BACKWARD:
                 if index > 0 and addresses[index - 1] == current_addr:
                     index -= 1
                 if index > 0:
-                    return [addresses[index - 1]]
+                    return [name_result(addr_name_dict[index - 1][0], addr_name_dict[index - 1][1])]
 
             return []
+        return [name_result(item[0], item[1]) for item in addr_name_dict]
 
-        search_result_list = []
-        for address, name in idautils.Names():
-            if keyword in name and address >= start and address <= end:
-                search_result_list.append(address)
-        return search_result_list
 
     @classmethod
     def assembly_code_search(cls, assembly_search_config):
@@ -458,6 +509,7 @@ class SearchForm(idaapi.PluginForm):
         search_keyword_layout = QtWidgets.QVBoxLayout()
         
         self.search_keyword_edit = QtWidgets.QTextEdit()
+        self.search_keyword_edit.setAcceptRichText(False)
         search_keyword_layout.addWidget(self.search_keyword_edit)
 
         self.search_keyword_box.setLayout(search_keyword_layout)
@@ -545,9 +597,23 @@ class SearchForm(idaapi.PluginForm):
         return self.SearchConfigureBox
 
     def _search_result_box_init(self):
-        search_result_box = QtWidgets.QTextEdit()
-        search_result_box.setReadOnly(True)
-        return search_result_box
+        self.SearchResultBox = QtWidgets.QGroupBox()
+        self.SearchResultLayout = QtWidgets.QVBoxLayout()
+
+        search_result_box = QtWidgets.QGroupBox("Search Result")
+        search_result_box.setMinimumWidth(750)
+        search_result_layout = QtWidgets.QVBoxLayout()
+
+        self.search_result_tree = QtWidgets.QTreeWidget()
+        self.search_result_tree.setHeaderLabels(["icon","Type","Address","Detail"])
+        search_result_layout.addWidget(self.search_result_tree)
+        search_result_box.setLayout(search_result_layout)
+
+        self.SearchResultLayout.addWidget(search_result_box)
+        self.SearchResultBox.setLayout(self.SearchResultLayout)
+        return self.SearchResultBox
+
+
 
 
     def _on_search_type_changed(self, index):
@@ -655,11 +721,11 @@ Search: Add code
                         if i < len(parts):
                             self.SetControlValue(getattr(self, f'_operand{i}'), part.strip())
                             if i == 1:
-                                self.operand1 = part;
+                                self.operand1 = part
                             elif i == 2:
-                                self.operand2 = part;
+                                self.operand2 = part
                             elif i == 3:
-                                self.operand3 = part;
+                                self.operand3 = part
 
 
                 elif fid in [self._insn_mnen.id, self._operand1.id, self._operand2.id, self._operand3.id]:
@@ -760,7 +826,14 @@ Search: Add code
             search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
             search_result = SearchManager().bytes_search(search_config)
             for i in search_result:
-                print(hex(i))
+                print(hex(i.address))
+                print(i.detail)
+
+
+
+
+
+
         elif(self.search_type_comboBox.currentIndex() == 1):
             search_config = comments_search_config()
             search_config.set_range(self.search_range_start, self.search_range_end)
@@ -771,7 +844,8 @@ Search: Add code
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
             search_result = SearchManager().comments_search(search_config)
             for i in search_result:
-                print(hex(i))
+                print(hex(i.address))
+                print(i.detail)
             
         elif(self.search_type_comboBox.currentIndex() == 2):
             search_config = names_search_config()
@@ -783,7 +857,8 @@ Search: Add code
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
             search_result = SearchManager().names_search(search_config)
             for i in search_result:
-                print(hex(i))
+                print(hex(i.address))
+                print(i.detail)
 
         elif(self.search_type_comboBox.currentIndex() == 3):
             search_config = code_search_config()
@@ -795,7 +870,8 @@ Search: Add code
             search_config.set_code_search_target(self.extract_assembly_code_lines())
             search_result = SearchManager().assembly_code_search(search_config)
             for i in search_result:
-                print(hex(i))
+                print(hex(i.address))
+                print(i.detail)
 
 
         # self.search_result_box.clear()
@@ -816,7 +892,7 @@ class SearchTool(idaapi.plugin_t):
     def __init__(self):
         super(SearchTool, self).__init__()
         self.name = "Search"
-        self.version = "0.3"
+        self.version = "0.4"
         self.description = "A plugin for searching data in IDA"
 
     def term(self):
