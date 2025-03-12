@@ -1,4 +1,8 @@
-import bisect 
+import bisect
+from calendar import c
+import re
+
+from sympy import N 
 
 import idc
 import idaapi
@@ -10,6 +14,7 @@ import ida_bytes
 import ida_kernwin
 
 from PyQt5 import QtWidgets,QtCore
+
 try:
     # import fuzzywuzzy
     pass
@@ -42,6 +47,7 @@ class search_config_base():
         self.start = -1
         self.end = -1
         self.search_once = False
+        self.search_direction = ida_bytes.BIN_SEARCH_FORWARD
         self.current_addr = -1
 
     def set_range(self, start:int, end:int):
@@ -50,41 +56,47 @@ class search_config_base():
         self.start = start
         self.end = end
 
-    """
+    '''
     search_direction: 
     ida_bytes.BIN_SEARCH_FORWARD or ida_bytes.BIN_SEARCH_BACKWARD
-    """
+    '''
     def set_search_once(self, current_addr:int, search_direction:int):
-        if(current_addr >= ida_ida.inf_get_max_ea() or current_addr <= ida_ida.inf_get_min_ea()):
+        if current_addr >= ida_ida.inf_get_max_ea() or current_addr <= ida_ida.inf_get_min_ea():
             return
         self.search_once = True
+        if current_addr < self.start:
+            self.current_addr = self.start
+        elif current_addr > self.end:
+            self.current_addr = self.end
         self.current_addr = current_addr
         self.search_direction = search_direction
 
     def get_range(self):
         return self.start, self.end
 
+    def is_search_once(self):
+        return self.search_once
+
     def get_current_addr(self):
         return self.current_addr
+    
+    def get_search_direction(self):
+        return self.search_direction
 
 
 '''
 Data search configuration
 - Range: start, end
 - Keyword: keyword
-- Config: case sensitive, search direction,
-- Advanced Config: Fuzzy, Yara
-
+- Config: case sensitive,Fuzzy
 '''
 class data_search_config(search_config_base):
     def __init__(self):
         super().__init__()
         self.keyword = None
 
-        self.search_direction = ida_bytes.BIN_SEARCH_FORWARD
-
+        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE;
         self.is_fuzzy = False
-        self.is_yara = False
 
 
     def set_keyword(self, keyword: str):
@@ -95,17 +107,12 @@ class data_search_config(search_config_base):
     def get_keyword(self):
         return self.keyword
 
+    def set_case_sensitive(self, case_sensitive: bool):
+        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE if case_sensitive else ida_bytes.BIN_SEARCH_NOCASE
+
     def get_flag(self):
-        return self.search_direction
+        return self.search_direction | self.case_sensitive | ida_bytes.BIN_SEARCH_NOBREAK | ida_bytes.BIN_SEARCH_NOSHOW
 
-    def set_adv_config(self, is_fuzzy: bool = False, is_yara: bool = False):
-        if is_fuzzy and fuzzywuzzy is not None:
-            self.is_fuzzy = is_fuzzy
-        if is_yara and yara is not None:
-            self.is_yara = is_yara
-
-    def get_adv_config(self):
-        return self.is_fuzzy, self.is_yara
 
 
 '''
@@ -142,6 +149,26 @@ class names_search_config(search_config_base):
     def get_keyword(self):
         return self.keyword
 
+class assembly_code_line():
+    def __init__(self, insn_mnen:str = None, operand1:str = None, operand2:str = None, operand3:str = None):
+        self.insn_mnen = insn_mnen
+        self.operand1 = operand1
+        self.operand2 = operand2
+        self.operand3 = operand3
+
+class code_search_config(search_config_base):
+    def __init__(self):
+        super().__init__()
+        self.code_search_targets = []
+
+    def set_code_search_target(self, list):
+        if not all(isinstance(x, assembly_code_line) for x in list):
+            return 
+        self.code_search_targets = list
+    
+    def get_code_search_targets(self):
+        return self.code_search_targets
+
 class SearchManager():
     def __init__(self):
         pass
@@ -161,10 +188,10 @@ class SearchManager():
             return []
             
         current_addr = data_search_config.get_current_addr()
-        if data_search_config.search_once and current_addr != -1:
-            if current_addr > end or current_addr < start:
+        if data_search_config.is_search_once():
+            if current_addr > end or current_addr < start  or current_addr == -1:
                 return []
-            elif data_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD:
+            elif data_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD:
                 start = current_addr
             else:
                 end = current_addr
@@ -206,11 +233,11 @@ class SearchManager():
             return -1
 
         current_addr = comments_search_config.get_current_addr()
-        if comments_search_config.search_once and current_addr != -1:
-            if current_addr > end or current_addr < start:
+        if comments_search_config.is_search_once():
+            if current_addr > end or current_addr < start or current_addr == -1:
                 return []
-            step_function = ida_bytes.next_head if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else ida_bytes.prev_head
-            boundary_condition = lambda ea: ea < end if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else ea >= start
+            step_function = ida_bytes.next_head if comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else ida_bytes.prev_head
+            boundary_condition = lambda ea: ea < end if comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else ea >= start
 
             ea = current_addr
             while boundary_condition(ea):
@@ -218,7 +245,9 @@ class SearchManager():
                 cmt_idx = find_comment(line)
                 if cmt_idx != -1 and keyword in line[cmt_idx:]:
                     return [ea]
-                ea = step_function(ea, end if comments_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD else start)
+                ea = step_function(ea, end if comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else start)
+                if ea == idaapi.BADADDR:
+                    break
             return []
 
         search_result_list = []
@@ -230,6 +259,8 @@ class SearchManager():
                 if keyword in line[cmt_idx:]:
                     search_result_list.append(ea)
             ea = ida_bytes.next_head(ea, end)
+            if ea == idaapi.BADADDR:
+                break
         return search_result_list
 
     @classmethod
@@ -240,20 +271,20 @@ class SearchManager():
         if keyword is None or keyword == "":
             return []
 
-        if names_search_config.search_once and names_search_config.current_addr != -1:
-            current_addr = names_search_config.current_addr
-            if current_addr > end or current_addr < start:
+        if names_search_config.is_search_once():
+            current_addr = names_search_config.get_current_addr()
+            if current_addr > end or current_addr < start or current_addr == -1:
                 return []
 
             addresses = sorted([address for address, name in idautils.Names() if keyword in name and address >= start and address <= end])
             
             index = bisect.bisect_left(addresses, current_addr)
-            if names_search_config.search_direction == ida_bytes.BIN_SEARCH_FORWARD:
+            if names_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD:
                 if index < len(addresses) and addresses[index] == current_addr:
                     index += 1
                 if index < len(addresses):
                     return [addresses[index]]
-            elif names_search_config.search_direction == ida_bytes.BIN_SEARCH_BACKWARD:
+            elif names_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_BACKWARD:
                 if index > 0 and addresses[index - 1] == current_addr:
                     index -= 1
                 if index > 0:
@@ -265,6 +296,69 @@ class SearchManager():
         for address, name in idautils.Names():
             if keyword in name and address >= start and address <= end:
                 search_result_list.append(address)
+        return search_result_list
+
+    @classmethod
+    def assembly_code_search(cls, assembly_search_config):
+        start, end = assembly_search_config.get_range()
+        code_search_targets = assembly_search_config.get_code_search_targets()
+        if not code_search_targets:
+            return []
+        
+        def find_code_a_line(ea,line: assembly_code_line):
+            if not idaapi.is_loaded(ea):
+                return False
+            if line.insn_mnen is not None and line.insn_mnen != idc.print_insn_mnem(ea):
+                return False
+            if line.operand1 is not None and line.operand1 != idc.print_operand(ea, 0):
+                return False
+            if line.operand2 is not None and line.operand2 != idc.print_operand(ea, 1):
+                return False
+            if line.operand3 is not None and line.operand3 != idc.print_operand(ea, 2):
+                return False
+            return True
+    
+        def find_code_snippet(ea, code_search_targets:list,end):
+            for code_search_target in code_search_targets:
+                if not find_code_a_line(ea, code_search_target):
+                    return False
+                ea = ida_bytes.next_head(ea, end)
+                if ea == idaapi.BADADDR or ea >= end:  # 检查无效地址
+                    return False
+            return True
+        
+        current_addr = assembly_search_config.get_current_addr()
+        if assembly_search_config.is_search_once():
+            if current_addr > end or current_addr < start or current_addr == -1:
+                return []
+            if assembly_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD:
+                while current_addr < end:
+                    if find_code_snippet(current_addr, code_search_targets,end):
+                        return [current_addr]
+                    current_addr = ida_bytes.next_head(current_addr, end)
+                    if current_addr == idaapi.BADADDR or current_addr >= end:
+                        break
+            elif assembly_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_BACKWARD:
+                while current_addr > start:
+                    if find_code_snippet(current_addr, code_search_targets,end):
+                        print("found")
+                        return [current_addr]
+                    print("current_addr:",current_addr)
+                    
+                    current_addr = ida_bytes.prev_head(current_addr, start)
+                    if current_addr == idaapi.BADADDR or current_addr < start:
+                        print("Not found")
+                        break
+            return []
+
+        ea = start
+        search_result_list = []
+        while ea < end:
+            if find_code_snippet(ea, code_search_targets, end):
+                search_result_list.append(ea)
+            ea = ida_bytes.next_head(ea, end)
+            if ea == idaapi.BADADDR or ea >= end:
+                break
         return search_result_list
 
 
@@ -291,8 +385,6 @@ class SearchForm(idaapi.PluginForm):
         self.search_result_box = self._search_result_box_init()
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
-
-
         splitter.addWidget(self.search_configure_box)
         splitter.addWidget(self.search_result_box)
 
@@ -309,7 +401,7 @@ class SearchForm(idaapi.PluginForm):
         self.SearchConfigureBox.setMinimumWidth(750)
         SearchConfigureLayout = QtWidgets.QVBoxLayout()
 
-        """Search Type Select"""
+        '''Search Type Select'''
         search_type_box = QtWidgets.QGroupBox("Search Type:")
         search_type_box.setMaximumHeight(80)
         search_type_layout = QtWidgets.QVBoxLayout()
@@ -323,7 +415,7 @@ class SearchForm(idaapi.PluginForm):
         search_type_box.setLayout(search_type_layout)
         SearchConfigureLayout.addWidget(search_type_box)
 
-        """Search Range Configure"""
+        '''Search Range Configure'''
         search_range_box = QtWidgets.QGroupBox("Search Range:")
         search_range_box.setMaximumHeight(200)
         search_range_layout = QtWidgets.QVBoxLayout()
@@ -362,7 +454,7 @@ class SearchForm(idaapi.PluginForm):
         SearchConfigureLayout.addWidget(search_range_box)
 
 
-        """Search Keyword Configure"""
+        '''Search Keyword Configure'''
         search_keyword_box = QtWidgets.QGroupBox("Search Keyword:")
         search_keyword_layout = QtWidgets.QVBoxLayout()
         
@@ -377,24 +469,30 @@ class SearchForm(idaapi.PluginForm):
 
 
 
-        """Advanced Configure"""
-        advanced_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
-        advanced_configure_layout = QtWidgets.QVBoxLayout()
+        '''Configure'''
+        data_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
+        data_configure_layout = QtWidgets.QVBoxLayout()
 
 
-        option1 = QtWidgets.QCheckBox("Fuzzy Search")
-        advanced_configure_layout.addWidget(option1)
+        self.case_sensitive_config = QtWidgets.QCheckBox("Case sensitive")
+        data_configure_layout.addWidget(self.case_sensitive_config)
 
-        option2 = QtWidgets.QCheckBox("Enable Option 2")
-        advanced_configure_layout.addWidget(option2)
+        
+        self.fuuzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
+        data_configure_layout.addWidget(self.fuuzy_search_config)
 
-        advanced_configure_box.setLayout(advanced_configure_layout)
-        SearchConfigureLayout.addWidget(advanced_configure_box)
 
-        """Search Start Button"""
+
+
+        data_configure_box.setLayout(data_configure_layout)
+        SearchConfigureLayout.addWidget(data_configure_box)
+
+        '''Search Start Button'''
 
         search_button_box = QtWidgets.QGroupBox()
         search_button_layout = QtWidgets.QHBoxLayout()
+        search_button_layout.addStretch(1)
+
         search_all_button = QtWidgets.QPushButton("Search All")
         search_all_button.clicked.connect(lambda: self._start_search(0))
         search_all_button.setMinimumWidth(200)
@@ -470,13 +568,13 @@ class SearchForm(idaapi.PluginForm):
 
         self._set_search_range(target_segm.start_ea, target_segm.end_ea)
 
-    """
+    '''
     Search Function
     model: int
     0: Search All
     1: Search Next
     2: Search Previous
-    """
+    '''
     def _start_search(self,model:int):
         self._set_search_range(-1,-1)
         print("Start Search")
@@ -490,6 +588,7 @@ class SearchForm(idaapi.PluginForm):
             elif(model == 2):
                 search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
             search_result = SearchManager().bytes_search(search_config)
             for i in search_result:
                 print(hex(i))
@@ -526,16 +625,16 @@ class SearchForm(idaapi.PluginForm):
 
 
 
-class DataSearch(idaapi.plugin_t):
+class SearchTool(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
     wanted_name = "Search"
     wanted_hotkey = "Shift-F"
 
 
     def __init__(self):
-        super(DataSearch, self).__init__()
+        super(SearchTool, self).__init__()
         self.name = "Search"
-        self.version = "0.2"
+        self.version = "0.3"
         self.description = "A plugin for searching data in IDA"
 
     def term(self):
@@ -551,8 +650,19 @@ class DataSearch(idaapi.plugin_t):
 
 
 # def PLUGIN_ENTRY():
-#     return DataSearch()
+#     return SearchTool()
 # idaapi.load_plugin("F:\\Projects\\IDA-Search\\Search.py")
 
-form = SearchForm()
-form.Show("Search")
+# form = SearchForm()
+# form.Show("Search")
+
+
+
+
+t = code_search_config()
+t.set_range(ida_ida.inf_get_min_ea(),ida_ida.inf_get_max_ea())
+t.set_code_search_target([assembly_code_line("mov","rax",None,None)])
+t.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+result = SearchManager().assembly_code_search(t)
+for i in result:
+    print(hex(i))
