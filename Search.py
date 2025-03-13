@@ -7,6 +7,7 @@ import ida_lines
 import idautils
 import ida_bytes
 import ida_kernwin
+import ida_funcs
 
 from PyQt5 import QtWidgets,QtCore
 
@@ -95,11 +96,21 @@ class data_search_config(search_config_base):
 
     def set_case_sensitive(self, case_sensitive: bool):
         self._case_sensitive = ida_bytes.BIN_SEARCH_CASE if case_sensitive else ida_bytes.BIN_SEARCH_NOCASE
+    
+    def set_bytes_search(self, bytes_search: bool):
+        self._bytes_search = bytes_search
+
+    def get_bytes_search(self):
+        return self._bytes_search
 
     def get_flag(self):
         return self._search_direction | self._case_sensitive | ida_bytes.BIN_SEARCH_NOBREAK | ida_bytes.BIN_SEARCH_NOSHOW
 
-
+    def set_is_fuzzy(self, is_fuzzy: bool):
+        self._is_fuzzy = is_fuzzy
+    
+    def is_fuzzy(self):
+        return self._is_fuzzy
 
 '''
 Symbol search configuration
@@ -155,20 +166,6 @@ class code_search_config(search_config_base):
         return self.code_search_targets
 
 
-'''Search Result Type'''
-HEX_DATA = 1
-COMMENT = 2
-NAME = 3
-CODE = 4 
-
-type_str_dict = {
-    HEX_DATA : "hex data",
-    COMMENT : "Comment",
-    NAME : "Name",
-    CODE : "Code",
-}
-
-
 class search_result_base:
     def __init__(self):
         self.icon = ""
@@ -177,41 +174,84 @@ class search_result_base:
         self.detail = None
 
 class hex_data_result(search_result_base):
-    def __init__(self, address:int, length:int):
+    def __init__(self, address:int):
         super().__init__()
         self.address = address
-        self.type = HEX_DATA
+        self._set_type()
+        self.length = 5
+        self._set_detail()
 
+    def _set_detail(self):
+        disasm = idc.generate_disasm_line(self.address,0)
+        data_byte = idc.get_bytes(self.address,5)
+        self.detail = ' '.join([f"{i:02X}" for i in bytearray(data_byte)]) + "...   (" + disasm + ")"
 
-        disasm = idc.generate_disasm_line(address,0)
-        if(length <= 5):
-            data_byte = idc.get_bytes(address,length)
-            self.detail = ' '.join([f"{i:02X}" for i in bytearray(data_byte)]) + "  (" + disasm + ")"
-        else:
-            data_byte = idc.get_bytes(address,5)
-            self.detail = ' '.join([f"{i:02X}" for i in bytearray(data_byte)]) + "...   (" + disasm + ")"
+    def _set_type(self):
+        checks = [
+            (idc.is_byte, "hex"),
+            (idc.is_word, "hex"),
+            (idc.is_dword, "hex"),
+            (idc.is_qword, "hex"),
+            (idc.is_strlit, "string"),
+            (idc.is_code, "code")
+        ]
+        data_type_flag = ida_bytes.get_flags(self.address)
+        self.type = next((key for func, key in checks if func(data_type_flag)), "hex")
 
 class comment_result(search_result_base):
     def __init__(self, address:int, comment:str):
         super().__init__()
         self.address = address
-        self.type = COMMENT
+        self._set_type()
         self.detail = ''.join([char for char in comment if char.isprintable() and not char.isspace() or char == ' '])
+
+    def _set_type(self):
+        if ida_bytes.get_cmt(self.address,True) is not None:
+            self.type = "repeatable comment"
+        elif ida_bytes.get_cmt(self.address,False) is not None:
+            self.type = "normal comment"
+        else:
+            self.type = "auto comment"
 
 class name_result(search_result_base):
     def __init__(self, address:int, name:str):
         super().__init__()
         self.address = address
-        self.type = NAME
+        self._set_type()
         self.detail = name
+
+
+
+
+    def _set_type(self):
+        flag = ida_bytes.get_full_flags(self.address)
+        if ida_bytes.is_func(flag):
+            self.type = "function name"
+        elif ida_bytes.is_strlit(flag):
+            self.type = "string name"
+        elif ida_bytes.is_data(flag):
+            self.type = "data name"
+        elif ida_bytes.is_code(flag):
+            self.type = "code name"
+        else:
+            self.type = "name"
+
+
+
 
 class code_result(search_result_base):
     def __init__(self, address:int):
         super().__init__()
         self.address = address
-        self.type = CODE
+        self._set_type()
         self.detail = idc.generate_disasm_line(address,0)
 
+    def _set_type(self):
+        func_name = idc.get_func_name(self.address)
+        if func_name is not None and func_name != "":
+            self.type = "code from {function}".format(function = func_name)
+        else:
+            self.type = "code"
 
 
 
@@ -224,7 +264,13 @@ class SearchManager():
     def bytes_search(cls,data_search_config):
         # keyword format: see ida_bytes.parse_binpat_str()
         start, end = data_search_config.get_range()
-        keyword = data_search_config.get_keyword()
+        length = 1;
+        if(data_search_config.get_bytes_search() == True):
+            keyword = data_search_config.get_keyword()
+        else:
+            keyword = "\"" + data_search_config.get_keyword() + "\""
+            length = len(keyword)
+
         flag = data_search_config.get_flag()
         if keyword is None or flag is None:
             return []
@@ -246,7 +292,7 @@ class SearchManager():
             addr = ida_bytes.bin_search(start, end, patterns, flag)
             if(addr == idaapi.BADADDR):
                 return []
-            return [hex_data_result(addr, len(patterns))]
+            return [hex_data_result(addr)]
 
         if start == -1 or end == -1:
             return []
@@ -256,7 +302,7 @@ class SearchManager():
             ea = ida_bytes.bin_search(ea, end, patterns, flag)
             if(ea == idaapi.BADADDR):
                 break
-            search_result_list.append(hex_data_result(ea, len(patterns)))
+            search_result_list.append(hex_data_result(ea))
             ea = idc.next_head(ea,end)
         return search_result_list
 
@@ -558,13 +604,13 @@ class SearchForm(idaapi.PluginForm):
         data_configure_layout = QtWidgets.QVBoxLayout()
 
 
-        self.case_sensitive_config = QtWidgets.QCheckBox("Case sensitive")
-        data_configure_layout.addWidget(self.case_sensitive_config)
-
-        
-        self.fuuzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
-        data_configure_layout.addWidget(self.fuuzy_search_config)
-
+        self.Data__case_sensitive_config = QtWidgets.QCheckBox("Case sensitive")
+        data_configure_layout.addWidget(self.Data__case_sensitive_config)
+        self.Data__bytes_search_config = QtWidgets.QCheckBox("Bytes Search")
+        data_configure_layout.addWidget(self.Data__bytes_search_config)
+        self.Data__fuzzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
+        data_configure_layout.addWidget(self.Data__fuzzy_search_config)
+    
 
 
 
@@ -582,13 +628,13 @@ class SearchForm(idaapi.PluginForm):
         search_all_button.setMinimumWidth(200)
         search_button_layout.addWidget(search_all_button)
 
-        search_next_button = QtWidgets.QPushButton("Search Next")
+        search_next_button = QtWidgets.QPushButton("Search Previous")
         search_next_button.clicked.connect(lambda: self._start_search(1))
         search_next_button.setMinimumWidth(200)
         search_button_layout.addWidget(search_next_button)
 
 
-        search_previous_button = QtWidgets.QPushButton("Search Previous")
+        search_previous_button = QtWidgets.QPushButton("Search Next")
         search_previous_button.clicked.connect(lambda: self._start_search(2))
         search_previous_button.setMinimumWidth(200)
         search_button_layout.addWidget(search_previous_button)
@@ -703,11 +749,20 @@ class SearchForm(idaapi.PluginForm):
 
     def _on_search_type_changed(self, index):
         current_text = self.search_type_comboBox.itemText(index)
-        print(self.search_type[current_text])
 
-        if(self.search_type[current_text] in [0,1,2]):
+        if(self.search_type[current_text] == 0):
             self.search_keyword_box.show()
             self.data_configure_box.show()
+            self.search_code_box.hide()
+
+        elif(self.search_type[current_text] == 1):
+            self.search_keyword_box.show()
+            self.data_configure_box.hide()
+            self.search_code_box.hide()
+
+        elif(self.search_type[current_text] == 2):
+            self.search_keyword_box.show()
+            self.data_configure_box.hide()
             self.search_code_box.hide()
 
         elif(self.search_type[current_text] == 3):
@@ -918,17 +973,19 @@ Search: Add code
     """
     def _start_search(self,model:int):
         self._set_search_range(-1,-1)
-        self.search_result_tree.clear()
         search_results =[]
+        ea = idaapi.get_screen_ea()
         if(self.search_type_comboBox.currentIndex() == 0):
             search_config = data_search_config()
             search_config.set_range(self.search_range_start, self.search_range_end)
             if(model == 1):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
             elif(model == 2):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
-            search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
+            search_config.set_case_sensitive( self.Data__case_sensitive_config.isChecked())
+            search_config.set_bytes_search( self.Data__bytes_search_config.isChecked())
+            search_config.set_is_fuzzy(self.Data__fuzzy_search_config.isChecked())
             search_results = SearchManager().bytes_search(search_config)
 
 
@@ -936,9 +993,9 @@ Search: Add code
             search_config = comments_search_config()
             search_config.set_range(self.search_range_start, self.search_range_end)
             if(model == 1):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
             elif(model == 2):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
             search_results = SearchManager().comments_search(search_config)
 
@@ -947,9 +1004,9 @@ Search: Add code
             search_config = names_search_config()
             search_config.set_range(self.search_range_start, self.search_range_end)
             if(model == 1):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
             elif(model == 2):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
             search_results = SearchManager().names_search(search_config)
 
@@ -958,21 +1015,28 @@ Search: Add code
             search_config = code_search_config()
             search_config.set_range(self.search_range_start, self.search_range_end)
             if(model == 1):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
             elif(model == 2):
-                search_config.set_search_once(idaapi.get_screen_ea(),ida_bytes.BIN_SEARCH_BACKWARD)
+                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_code_search_target(self.extract_assembly_code_lines())
             search_results = SearchManager().assembly_code_search(search_config)
+     
 
-        for result in search_results:
-            item = QtWidgets.QTreeWidgetItem([
-                result.icon,
-                hex(result.address),
-                type_str_dict[result.type],
-                result.detail
-            ])
-            self.search_result_tree.addTopLevelItem(item)
 
+        if(model == 0):
+            self.search_result_tree.clear()
+            for result in search_results:
+                item = QtWidgets.QTreeWidgetItem([
+                    result.icon,
+                    hex(result.address),
+                    result.type,
+                    result.detail
+                ])
+                self.search_result_tree.addTopLevelItem(item)
+        else:
+            if search_results:
+                target_addr = search_results[0].address
+                idaapi.jumpto(target_addr)
 
 
 
@@ -989,7 +1053,7 @@ class SearchTool(idaapi.plugin_t):
     def __init__(self):
         super(SearchTool, self).__init__()
         self.name = "Search"
-        self.version = "0.6"
+        self.version = "0.7"
         self.description = "A plugin for searching data in IDA"
 
     def term(self):
