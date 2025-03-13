@@ -29,17 +29,17 @@ except:
 
 class search_config_base():
     def __init__(self):
-        self.start = -1
-        self.end = -1
-        self.search_once = False
-        self.search_direction = ida_bytes.BIN_SEARCH_FORWARD
-        self.current_addr = -1
+        self._start = -1
+        self._end = -1
+        self._search_once = False
+        self._search_direction = ida_bytes.BIN_SEARCH_FORWARD
+        self._current_addr = -1
 
     def set_range(self, start:int, end:int):
         if start > end or start < ida_ida.inf_get_min_ea() or end > ida_ida.inf_get_max_ea():
             return
-        self.start = start
-        self.end = end
+        self._start = start
+        self._end = end
 
     '''
     search_direction: 
@@ -48,25 +48,25 @@ class search_config_base():
     def set_search_once(self, current_addr:int, search_direction:int):
         if current_addr >= ida_ida.inf_get_max_ea() or current_addr <= ida_ida.inf_get_min_ea():
             return
-        self.search_once = True
-        if current_addr < self.start:
-            self.current_addr = self.start
-        elif current_addr > self.end:
-            self.current_addr = self.end
-        self.current_addr = current_addr
-        self.search_direction = search_direction
+        self._search_once = True
+        if current_addr < self._start:
+            self._current_addr = self._start
+        elif current_addr > self._end:
+            self._current_addr = self._end
+        self._current_addr = current_addr
+        self._search_direction = search_direction
 
     def get_range(self):
-        return self.start, self.end
+        return self._start, self._end
 
     def is_search_once(self):
-        return self.search_once
+        return self._search_once
 
     def get_current_addr(self):
-        return self.current_addr
+        return self._current_addr
     
     def get_search_direction(self):
-        return self.search_direction
+        return self._search_direction
 
 
 '''
@@ -78,25 +78,26 @@ Data search configuration
 class data_search_config(search_config_base):
     def __init__(self):
         super().__init__()
-        self.keyword = None
+        self._keyword = None
 
-        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE
-        self.is_fuzzy = False
+        self._case_sensitive = ida_bytes.BIN_SEARCH_CASE
+        self._is_fuzzy = False
+        self._bytes_search = False
 
 
     def set_keyword(self, keyword: str):
         if not type(keyword) is str:
             return
-        self.keyword = keyword
+        self._keyword = keyword
 
     def get_keyword(self):
-        return self.keyword
+        return self._keyword
 
     def set_case_sensitive(self, case_sensitive: bool):
-        self.case_sensitive = ida_bytes.BIN_SEARCH_CASE if case_sensitive else ida_bytes.BIN_SEARCH_NOCASE
+        self._case_sensitive = ida_bytes.BIN_SEARCH_CASE if case_sensitive else ida_bytes.BIN_SEARCH_NOCASE
 
     def get_flag(self):
-        return self.search_direction | self.case_sensitive | ida_bytes.BIN_SEARCH_NOBREAK | ida_bytes.BIN_SEARCH_NOSHOW
+        return self._search_direction | self._case_sensitive | ida_bytes.BIN_SEARCH_NOBREAK | ida_bytes.BIN_SEARCH_NOSHOW
 
 
 
@@ -108,37 +109,50 @@ Symbol search configuration
 class comments_search_config(search_config_base):
     def __init__(self):
         super().__init__()
-        self.keyword = None
+        self._keyword = None
 
     def set_keyword(self, keyword: str):
         if not type(keyword) is str:
             return
-        self.keyword = keyword
+        self._keyword = keyword
 
     def get_keyword(self):
-        return self.keyword
+        return self._keyword
 
 
 class names_search_config(search_config_base):
     def __init__(self):
         super().__init__()
-        self.keyword = None
-        self.is_search_comments = True
-        self.is_search_names = True
+        self._keyword = None
 
     def set_keyword(self, keyword: str):
         if not type(keyword) is str:
             return
-        self.keyword = keyword
+        self._keyword = keyword
 
     def get_keyword(self):
-        return self.keyword
+        return self._keyword
 
-class search_result_base:
+
+class assembly_code_line():
+    def __init__(self, insn_mnen:str = None, operand1:str = None, operand2:str = None, operand3:str = None):
+        self.insn_mnen = insn_mnen
+        self.operand1 = operand1
+        self.operand2 = operand2
+        self.operand3 = operand3
+
+class code_search_config(search_config_base):
     def __init__(self):
-        self.address = -1
-        self.type = -1
-        self.detail = None
+        super().__init__()
+        self.code_search_targets = []
+
+    def set_code_search_target(self, list):
+        if not all(isinstance(x, assembly_code_line) for x in list):
+            return 
+        self.code_search_targets = list
+    
+    def get_code_search_targets(self):
+        return self.code_search_targets
 
 
 '''Search Result Type'''
@@ -148,7 +162,7 @@ NAME = 3
 CODE = 4 
 
 type_str_dict = {
-    HEX_DATA : "address",
+    HEX_DATA : "hex data",
     COMMENT : "Comment",
     NAME : "Name",
     CODE : "Code",
@@ -201,26 +215,6 @@ class code_result(search_result_base):
 
 
 
-
-class assembly_code_line():
-    def __init__(self, insn_mnen:str = None, operand1:str = None, operand2:str = None, operand3:str = None):
-        self.insn_mnen = insn_mnen
-        self.operand1 = operand1
-        self.operand2 = operand2
-        self.operand3 = operand3
-
-class code_search_config(search_config_base):
-    def __init__(self):
-        super().__init__()
-        self.code_search_targets = []
-
-    def set_code_search_target(self, list):
-        if not all(isinstance(x, assembly_code_line) for x in list):
-            return 
-        self.code_search_targets = list
-    
-    def get_code_search_targets(self):
-        return self.code_search_targets
 
 class SearchManager():
     def __init__(self):
@@ -452,8 +446,7 @@ class SearchForm(idaapi.PluginForm):
 
 
     def _search_configure_box_init(self):
-        self.SearchConfigureBox = QtWidgets.QGroupBox()
-        self.SearchConfigureBox.setMinimumWidth(750)
+        self.SearchConfigureBox = QtWidgets.QWidget()
         SearchConfigureLayout = QtWidgets.QVBoxLayout()
 
         """Search Type Select"""
@@ -529,7 +522,13 @@ class SearchForm(idaapi.PluginForm):
         search_code_layout = QtWidgets.QVBoxLayout()
 
         self.search_code_tree = QtWidgets.QTreeWidget()
-        self.search_code_tree.setHeaderLabels(["Code","Instruction Mnemonic", "Operand 1", "Operand 2", "Operand 3"])
+        self.search_code_tree.setHeaderLabels(["Code","insn", "op 1", "op 2", "op 3"])
+        self.search_code_tree.setColumnWidth(0, 550)
+        self.search_code_tree.setColumnWidth(1, 80)
+        self.search_code_tree.setColumnWidth(2, 80)
+        self.search_code_tree.setColumnWidth(3, 80)
+        self.search_code_tree.setColumnWidth(4, 80)
+        self.search_code_tree.setIndentation(5)
         search_code_layout.addWidget(self.search_code_tree)
 
         add_code_button_layout = QtWidgets.QHBoxLayout()
@@ -605,15 +604,93 @@ class SearchForm(idaapi.PluginForm):
         return self.SearchConfigureBox
 
     def _search_result_box_init(self):
-        self.SearchResultBox = QtWidgets.QGroupBox()
+        self.SearchResultBox = QtWidgets.QWidget()
         self.SearchResultLayout = QtWidgets.QVBoxLayout()
 
         search_result_box = QtWidgets.QGroupBox("Search Result")
         search_result_box.setMinimumWidth(750)
         search_result_layout = QtWidgets.QVBoxLayout()
 
-        self.search_result_tree = QtWidgets.QTreeWidget()
-        self.search_result_tree.setHeaderLabels(["icon","Type","Address","Detail"])
+        class SearchResultTree(QtWidgets.QTreeWidget):
+            def __init__(self, parent = None):
+                super().__init__(parent)
+                self.setHeaderLabels(["icon","Address","Type","Detail"])
+                self.setColumnWidth(0, 30)
+                self.setSelectionMode(QtWidgets.QTreeWidget.ExtendedSelection)
+                self.setIndentation(0)
+                self.setSortingEnabled(True)
+                self.itemDoubleClicked.connect(self._on_item_double_click)
+
+            def _on_item_double_click(self, item):
+                address = item.text(1)
+                try:
+                    address = int(address,16)
+                    idaapi.jumpto(address)
+                except ValueError:
+                    pass
+
+            def contextMenuEvent(self, event):
+                menu = QtWidgets.QMenu(self)
+
+                select_all_action = QtWidgets.QAction("Select All Items", self)
+                select_all_action.triggered.connect(self.select_all_items)
+                menu.addAction(select_all_action)
+                menu.addSeparator()
+                
+
+                copy_menu = QtWidgets.QMenu("Copy Selected Item Content", self)
+                copy_actions = [
+                    ("Address", 1),
+                    ("Detail", 3)
+                ]
+                for label, column in copy_actions:
+                    action = QtWidgets.QAction(label, self)
+                    action.triggered.connect(lambda checked, col=column: self.copy_selected_column(col))
+                    copy_menu.addAction(action)
+
+                menu.addMenu(copy_menu)
+
+                copy_as_list_menu = QtWidgets.QMenu("Copy Selected Item Content as List", self)
+                for label, column in copy_actions:
+                    action = QtWidgets.QAction(label, self)
+                    action.triggered.connect(lambda checked, col=column: self.copy_selected_column_as_list(col))
+                    copy_as_list_menu.addAction(action)
+                menu.addMenu(copy_as_list_menu)
+
+
+
+
+
+
+                selected_items = self.selectedItems()
+                if not selected_items:
+                    copy_menu.setVisible(False)
+                    copy_as_list_menu.setVisible(False)
+                    return
+
+                menu.exec_(event.globalPos())
+
+            def select_all_items(self):
+                self.selectAll()
+            def copy_selected_column(self, column):
+                clipboard = QtWidgets.QApplication.clipboard()
+                selected_items = self.selectedItems()
+                text_to_copy = "\n".join(item.text(column) for item in selected_items)
+                clipboard.setText(text_to_copy)
+                print(f"Copied column {column} content to clipboard")
+
+
+            def copy_selected_column_as_list(self, column):
+                clipboard = QtWidgets.QApplication.clipboard()
+                selected_items = self.selectedItems()
+                if column == 1:  # Assuming "Address" is the second column and has index 1
+                    items_content = [item.text(column) for item in selected_items]
+                else:
+                    items_content = [f'"{item.text(column)}"' for item in selected_items]
+                text_to_copy = f"[{', '.join(items_content)}]"
+                clipboard.setText(text_to_copy)
+
+        self.search_result_tree = SearchResultTree()
         search_result_layout.addWidget(self.search_result_tree)
         search_result_box.setLayout(search_result_layout)
 
@@ -890,8 +967,8 @@ Search: Add code
         for result in search_results:
             item = QtWidgets.QTreeWidgetItem([
                 result.icon,
-                type_str_dict[result.type],
                 hex(result.address),
+                type_str_dict[result.type],
                 result.detail
             ])
             self.search_result_tree.addTopLevelItem(item)
@@ -912,7 +989,7 @@ class SearchTool(idaapi.plugin_t):
     def __init__(self):
         super(SearchTool, self).__init__()
         self.name = "Search"
-        self.version = "0.5"
+        self.version = "0.6"
         self.description = "A plugin for searching data in IDA"
 
     def term(self):
