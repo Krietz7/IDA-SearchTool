@@ -1,4 +1,6 @@
 # IDA-Search Tool
+[中文](README.zh_CN.md)
+
 a IDA python plugin to search different types of data in IDA databases, supports searching for different types of data such as bytes, comments, codes, etc., and supports copying and export of search results.
 
 
