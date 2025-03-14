@@ -1041,39 +1041,65 @@ Search: Add code
 
 
 
+class SearchMenuHandler(idaapi.action_handler_t):
+    @classmethod
+    def get_name(cls):
+        return cls.__name__
 
+    @classmethod
+    def get_label(cls):
+        return cls.label
+
+    @classmethod
+    def register(cls, plugin, label, hotkey):
+        cls.plugin = plugin
+        cls.label = label
+        instance = cls()
+        return idaapi.register_action(idaapi.action_desc_t(cls.get_name(),instance.get_label(),instance,hotkey))
+
+    @classmethod
+    def unregister(cls):
+        idaapi.unregister_action(cls.get_name())
+
+    @classmethod
+    def activate(cls,ctx):
+        form = SearchForm()
+        form.Show("SearchTool")
+
+
+    def update(self, ctx):
+        return idaapi.AST_ENABLE_ALWAYS
 
 
 class SearchTool(idaapi.plugin_t):
     flags = idaapi.PLUGIN_KEEP
-    wanted_name = "Search"
+    wanted_name = "SearchTool"
     wanted_hotkey = "Shift-F"
 
 
     def __init__(self):
         super(SearchTool, self).__init__()
-        self.name = "Search"
-        self.version = "0.7"
+        self.name = "SearchTool"
+        self.version = "0.8"
         self.description = "A plugin for searching data in IDA"
+
 
     def term(self):
         pass
 
     def init(self):
+        SearchMenuHandler.register(self, "Search Tool", "")
+        idaapi.attach_action_to_menu("Search/Search Tool", SearchMenuHandler.get_name(), idaapi.SETMENU_APP)
         return idaapi.PLUGIN_OK
 
     def run(self, arg):
         form = SearchForm()
-        form.Show("Search")
+        form.Show("SearchTool")
         pass
 
 
-# def PLUGIN_ENTRY():
-#     return SearchTool()
-# idaapi.load_plugin("F:\\Projects\\IDA-Search\\Search.py")
-
-form = SearchForm()
-form.Show("Search")
+def PLUGIN_ENTRY():
+    return SearchTool()
 
 
 
