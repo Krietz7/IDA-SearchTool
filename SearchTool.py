@@ -154,15 +154,15 @@ class assembly_code_line():
 class code_search_config(search_config_base):
     def __init__(self):
         super().__init__()
-        self.code_search_targets = []
+        self._code_search_targets = []
 
     def set_code_search_target(self, code_list):
         if not all(isinstance(x, assembly_code_line) for x in code_list):
             return
-        self.code_search_targets = code_list
+        self._code_search_targets = code_list
 
     def get_code_search_targets(self):
-        return self.code_search_targets
+        return self._code_search_targets
 
 
 class search_result_base:
@@ -177,7 +177,7 @@ class hex_data_result(search_result_base):
         super().__init__()
         self.address = address
         self._set_type()
-        self.length = 5
+        self._length = 5
         self._set_detail()
 
     def _set_detail(self):
@@ -194,23 +194,33 @@ class hex_data_result(search_result_base):
             (idc.is_strlit, "string"),
             (idc.is_code, "code")
         ]
-        data_type_flag = ida_bytes.get_flags(self.address)
+        data_type_flag = ida_bytes.get_flags(ida_bytes.get_item_head(self.address))
         self.type = next((key for func, key in checks if func(data_type_flag)), "hex")
 
 class comment_result(search_result_base):
-    def __init__(self, address:int, comment:str):
+    def __init__(self, address:int, comment:str, type = None):
         super().__init__()
         self.address = address
-        self._set_type()
+        self._set_type(type)
         self.detail = ''.join([char for char in comment if char.isprintable() and not char.isspace() or char == ' '])
 
-    def _set_type(self):
-        if ida_bytes.get_cmt(self.address,True) is not None:
-            self.type = "repeatable comment"
-        elif ida_bytes.get_cmt(self.address,False) is not None:
-            self.type = "normal comment"
+    def _set_type(self,type):
+        type_dict = {
+                ida_lines.SCOLOR_REGCMT : "regular comment",
+                ida_lines.SCOLOR_RPTCMT : "repeatable comment",
+                ida_lines.SCOLOR_AUTOCMT : "auto comment"
+            }
+        if type in type_dict.keys(): 
+
+            self.type = type_dict[type]
+
         else:
-            self.type = "auto comment"
+            if ida_bytes.get_cmt(self.address,True) is not None:
+                self.type = "repeatable comment"
+            elif ida_bytes.get_cmt(self.address,False) is not None:
+                self.type = "regular comment"
+            else:
+                self.type = "auto comment"
 
 class name_result(search_result_base):
     def __init__(self, address:int, name:str):
@@ -319,8 +329,8 @@ class SearchManager():
                     ida_lines.SCOLOR_AUTOCMT]:
                 cmt_idx = line.find(ida_lines.SCOLOR_ON + cmt_type)
                 if cmt_idx > -1:
-                    return cmt_idx
-            return -1
+                    return cmt_idx, cmt_type
+            return -1, -1
 
         current_addr = _comments_search_config.get_current_addr()
         if _comments_search_config.is_search_once():
@@ -332,9 +342,9 @@ class SearchManager():
             ea = current_addr
             while boundary_condition(ea):
                 line = ida_lines.generate_disasm_line(ea)
-                cmt_idx = find_comment(line)
+                cmt_idx, cmt_type = find_comment(line)
                 if cmt_idx != -1 and keyword in line[cmt_idx:]:
-                    return [comment_result(ea, line[cmt_idx:])]
+                    return [comment_result(ea, line[cmt_idx:], cmt_type)]
                 ea = step_function(ea, end if _comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else start)
                 if ea == idaapi.BADADDR:
                     break
@@ -344,10 +354,10 @@ class SearchManager():
         ea = start
         while ea < end:
             line = ida_lines.generate_disasm_line(ea,ida_lines.GENDSM_FORCE_CODE)
-            cmt_idx = find_comment(line)
+            cmt_idx, cmt_type = find_comment(line)
             if cmt_idx != -1:
                 if keyword in line[cmt_idx:]:
-                    search_result_list.append(comment_result(ea, line[cmt_idx:]))
+                    search_result_list.append(comment_result(ea, line[cmt_idx:], cmt_type))
             ea = ida_bytes.next_head(ea, end)
             if ea == idaapi.BADADDR:
                 break
@@ -434,7 +444,7 @@ class SearchManager():
                         break
             elif assembly_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_BACKWARD:
                 while current_addr > start:
-                    if find_code_snippet(current_addr, code_search_targets,end):
+                    if find_code_snippet(current_addr, code_search_targets, end):
                         return [code_result(current_addr)]
 
                     current_addr = ida_bytes.prev_head(current_addr, start)
@@ -678,7 +688,6 @@ class SearchForm(idaapi.PluginForm):
                 menu.addAction(select_all_action)
                 menu.addSeparator()
 
-
                 copy_menu = QtWidgets.QMenu("Copy Selected Item Content", self)
                 copy_actions = [
                     ("Address", 1),
@@ -712,7 +721,6 @@ class SearchForm(idaapi.PluginForm):
                 selected_items = self.selectedItems()
                 text_to_copy = "\n".join(item.text(column) for item in selected_items)
                 clipboard.setText(text_to_copy)
-                print(f"Copied column {column} content to clipboard")
 
             def copy_selected_column_as_list(self, column):
                 clipboard = QtWidgets.QApplication.clipboard()
@@ -1063,7 +1071,7 @@ class SearchTool(idaapi.plugin_t):
     def __init__(self):
         super(SearchTool, self).__init__()
         self.name = "SearchTool"
-        self.version = "0.9"
+        self.version = "1.0"
         self.description = "A plugin for searching data in IDA"
 
 

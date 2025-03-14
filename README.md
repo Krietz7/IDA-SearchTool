@@ -35,7 +35,7 @@ B8 ? ? ? ? 90  - byte 0xB8, 4 bytes with any value, byte 0x90
 ```
 
 ### Comments Search
-![](https://github.com/user-attachments/assets/3b53ee46-a3bd-4dc8-aed7-e81d216299f4)
+![](https://github.com/user-attachments/assets/da8b44b8-0d8c-4861-9154-4fd03a876a2b)
 
 ### Named Address Search
 ![](https://github.com/user-attachments/assets/4eb836a7-887f-4d27-a47e-8dd560a3cc86)
