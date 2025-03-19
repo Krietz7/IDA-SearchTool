@@ -6,15 +6,15 @@ import ida_ida
 import ida_lines
 import idautils
 import ida_bytes
+import ida_strlist
 import ida_kernwin
 
 from PyQt5 import QtWidgets,QtCore
 
-# try:
-#     # import fuzzywuzzy
-#     pass
-# except ImportError:
-#     fuzzywuzzy = None
+try:
+    from fuzzywuzzy import fuzz
+except ImportError:
+    fuzz = None
 # try:
 #     # import yara
 #     pass
@@ -22,10 +22,7 @@ from PyQt5 import QtWidgets,QtCore
 #     yara = None
 
 
-
-
-
-
+VERSION = "1.1"
 
 class search_config_base():
     def __init__(self):
@@ -82,6 +79,7 @@ class data_search_config(search_config_base):
 
         self._case_sensitive = ida_bytes.BIN_SEARCH_CASE
         self._is_fuzzy = False
+        self._fuzzy_score = 0
         self._bytes_search = False
 
 
@@ -105,11 +103,15 @@ class data_search_config(search_config_base):
     def get_flag(self):
         return self._search_direction | self._case_sensitive | ida_bytes.BIN_SEARCH_NOBREAK | ida_bytes.BIN_SEARCH_NOSHOW
 
-    def set_is_fuzzy(self, is_fuzzy: bool):
+    def set_fuzzy(self, is_fuzzy: bool, fuzzy_score: int):
         self._is_fuzzy = is_fuzzy
+        self._fuzzy_score = fuzzy_score
 
     def is_fuzzy(self):
         return self._is_fuzzy
+
+    def get_fuzzy_score(self):
+        return self._fuzzy_score
 
 '''
 Symbol search configuration
@@ -120,6 +122,8 @@ class comments_search_config(search_config_base):
     def __init__(self):
         super().__init__()
         self._keyword = None
+        self._is_fuzzy = False
+        self._fuzzy_score = 0
 
     def set_keyword(self, keyword: str):
         if not isinstance(keyword, str):
@@ -128,12 +132,24 @@ class comments_search_config(search_config_base):
 
     def get_keyword(self):
         return self._keyword
+
+    def set_fuzzy(self, is_fuzzy: bool, fuzzy_score: int):
+        self._is_fuzzy = is_fuzzy
+        self._fuzzy_score = fuzzy_score
+
+    def is_fuzzy(self):
+        return self._is_fuzzy
+
+    def get_fuzzy_score(self):
+        return self._fuzzy_score
 
 
 class names_search_config(search_config_base):
     def __init__(self):
         super().__init__()
         self._keyword = None
+        self._is_fuzzy = False
+        self._fuzzy_score = 0
 
     def set_keyword(self, keyword: str):
         if not isinstance(keyword, str):
@@ -143,6 +159,15 @@ class names_search_config(search_config_base):
     def get_keyword(self):
         return self._keyword
 
+    def set_fuzzy(self, is_fuzzy: bool, fuzzy_score: int):
+        self._is_fuzzy = is_fuzzy
+        self._fuzzy_score = fuzzy_score
+
+    def is_fuzzy(self):
+        return self._is_fuzzy
+
+    def get_fuzzy_score(self):
+        return self._fuzzy_score
 
 class assembly_code_line():
     def __init__(self, insn_mnen = None, operand1 = None, operand2 = None, operand3 = None):
@@ -311,6 +336,20 @@ class SearchManager():
                 break
             search_result_list.append(hex_data_result(ea))
             ea = idc.next_head(ea,end)
+
+        if _data_search_config.is_fuzzy() and fuzz != None:
+            n = ida_strlist.get_strlist_qty()
+            fuzzy_score = _data_search_config.get_fuzzy_score()
+
+            for i in range(n):
+                strinfo = ida_strlist.string_info_t()
+                ida_strlist.get_strlist_item(strinfo,i)
+                extracted_str = str(idc.get_bytes(strinfo.ea, idc.get_item_size(strinfo.ea)))[2:-1]
+                score = fuzz.partial_ratio(keyword[1:-1],extracted_str)
+
+                if score > fuzzy_score and score < 100: # less than 100 to avoid repeat match
+                    search_result_list.append(hex_data_result(strinfo.ea))
+
         return search_result_list
 
 
@@ -331,6 +370,15 @@ class SearchManager():
                 if cmt_idx > -1:
                     return cmt_idx, cmt_type
             return -1, -1
+        
+        def fuzzy_match(str_1, str_2, fuzzy_score):
+            score = fuzz.partial_ratio(str_1, str_2)
+            if score > fuzzy_score and score < 100:
+                return True
+
+        is_fuzzy =  _comments_search_config.is_fuzzy()
+        fuzzy_score = _comments_search_config.get_fuzzy_score()
+
 
         current_addr = _comments_search_config.get_current_addr()
         if _comments_search_config.is_search_once():
@@ -343,7 +391,7 @@ class SearchManager():
             while boundary_condition(ea):
                 line = ida_lines.generate_disasm_line(ea)
                 cmt_idx, cmt_type = find_comment(line)
-                if cmt_idx != -1 and keyword in line[cmt_idx:]:
+                if cmt_idx != -1 and (keyword in line[cmt_idx:] or (is_fuzzy and fuzzy_match(line[cmt_idx:], keyword, fuzzy_score))):
                     return [comment_result(ea, line[cmt_idx:], cmt_type)]
                 ea = step_function(ea, end if _comments_search_config.get_search_direction() == ida_bytes.BIN_SEARCH_FORWARD else start)
                 if ea == idaapi.BADADDR:
@@ -356,7 +404,7 @@ class SearchManager():
             line = ida_lines.generate_disasm_line(ea,ida_lines.GENDSM_FORCE_CODE)
             cmt_idx, cmt_type = find_comment(line)
             if cmt_idx != -1:
-                if keyword in line[cmt_idx:]:
+                if keyword in line[cmt_idx:] or (is_fuzzy and fuzzy_match(line[cmt_idx:], keyword, fuzzy_score)):
                     search_result_list.append(comment_result(ea, line[cmt_idx:], cmt_type))
             ea = ida_bytes.next_head(ea, end)
             if ea == idaapi.BADADDR:
@@ -371,9 +419,16 @@ class SearchManager():
         if keyword is None or keyword == "":
             return []
 
+        def fuzzy_match(str_1, str_2, fuzzy_score):
+            score = fuzz.partial_ratio(str_1, str_2)
+            if score > fuzzy_score and score < 100:
+                return True
+        is_fuzzy =  _names_search_config.is_fuzzy()
+        fuzzy_score = _names_search_config.get_fuzzy_score()
+
         addr_name_dict = sorted(
             [(address, name) for address, name in idautils.Names()
-             if keyword in name and start <= address <= end],
+             if (keyword in name or (is_fuzzy and fuzzy_match(keyword, name, fuzzy_score))) and start <= address <= end],
             key=lambda x: x[0]
         )
 
@@ -607,20 +662,43 @@ class SearchForm(idaapi.PluginForm):
         SearchConfigureLayout.addWidget(self.search_code_box)
 
         """Configure"""
-        self.data_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
-        data_configure_layout = QtWidgets.QVBoxLayout()
+        self.advanced_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
+        advanced_configure_layout = QtWidgets.QVBoxLayout()
+
+        '''Data configure section'''
+        self.case_sensitive_config = QtWidgets.QCheckBox("Case sensitive")
+        advanced_configure_layout.addWidget(self.case_sensitive_config)
+        self.bytes_search_config = QtWidgets.QCheckBox("Bytes Search")
+        advanced_configure_layout.addWidget(self.bytes_search_config)
+        self.fuzzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
+        advanced_configure_layout.addWidget(self.fuzzy_search_config)
+        if(fuzz == None):
+            self.fuzzy_search_config.hide()
 
 
-        self.Data__case_sensitive_config = QtWidgets.QCheckBox("Case sensitive")
-        data_configure_layout.addWidget(self.Data__case_sensitive_config)
-        self.Data__bytes_search_config = QtWidgets.QCheckBox("Bytes Search")
-        data_configure_layout.addWidget(self.Data__bytes_search_config)
-        self.Data__fuzzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
-        data_configure_layout.addWidget(self.Data__fuzzy_search_config)
+        fuzzy_search_slider_label = QtWidgets.QLabel("fuzzy search match level:")
+        fuzzy_search_slider_label.setVisible(False) 
+        advanced_configure_layout.addWidget(fuzzy_search_slider_label)
+        self.fuzzy_search_config.stateChanged.connect(
+            lambda state: fuzzy_search_slider_label.setVisible(state == QtCore.Qt.Checked))
+
+        self.fuzzy_search_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.fuzzy_search_slider.setRange(1, 100)
+        self.fuzzy_search_slider.setValue(50)
+        self.fuzzy_search_slider.setVisible(False)
+        self.fuzzy_search_slider.setMaximumWidth(300)
+        advanced_configure_layout.addWidget(self.fuzzy_search_slider)
+        self.fuzzy_search_config.stateChanged.connect(
+            lambda state: self.fuzzy_search_slider.setVisible(state == QtCore.Qt.Checked))
 
 
-        self.data_configure_box.setLayout(data_configure_layout)
-        SearchConfigureLayout.addWidget(self.data_configure_box)
+        self.advanced_configure_box.setLayout(advanced_configure_layout)
+        SearchConfigureLayout.addWidget(self.advanced_configure_box)
+
+
+
+
+
 
         """Search Start Button"""
 
@@ -746,22 +824,26 @@ class SearchForm(idaapi.PluginForm):
 
         if self.search_type[current_text] == 0:
             self.search_keyword_box.show()
-            self.data_configure_box.show()
+            self.advanced_configure_box.show()
             self.search_code_box.hide()
 
         elif self.search_type[current_text] == 1:
             self.search_keyword_box.show()
-            self.data_configure_box.hide()
+            self.advanced_configure_box.show()
+            self.case_sensitive_config.hide()
+            self.bytes_search_config.hide()
             self.search_code_box.hide()
 
         elif self.search_type[current_text] == 2:
             self.search_keyword_box.show()
-            self.data_configure_box.hide()
+            self.advanced_configure_box.show()
+            self.case_sensitive_config.hide()
+            self.bytes_search_config.hide()
             self.search_code_box.hide()
 
         elif self.search_type[current_text] == 3:
             self.search_keyword_box.hide()
-            self.data_configure_box.hide()
+            self.advanced_configure_box.hide()
             self.search_code_box.show()
 
 
@@ -975,9 +1057,9 @@ Search: Add code
             elif model == 2:
                 search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
-            search_config.set_case_sensitive( self.Data__case_sensitive_config.isChecked())
-            search_config.set_bytes_search( self.Data__bytes_search_config.isChecked())
-            search_config.set_is_fuzzy(self.Data__fuzzy_search_config.isChecked())
+            search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
+            search_config.set_bytes_search( self.bytes_search_config.isChecked())
+            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
             search_results = SearchManager().bytes_search(search_config)
 
 
@@ -989,6 +1071,7 @@ Search: Add code
             elif model == 2:
                 search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
             search_results = SearchManager().comments_search(search_config)
 
 
@@ -1000,6 +1083,7 @@ Search: Add code
             elif model == 2:
                 search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
             search_config.set_keyword(self.search_keyword_edit.toPlainText())
+            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
             search_results = SearchManager().names_search(search_config)
 
 
@@ -1071,7 +1155,7 @@ class SearchTool(idaapi.plugin_t):
     def __init__(self):
         super(SearchTool, self).__init__()
         self.name = "SearchTool"
-        self.version = "1.0"
+        self.version = VERSION
         self.description = "A plugin for searching data in IDA"
 
 
