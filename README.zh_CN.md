@@ -39,7 +39,7 @@ B8 ? ? ? ? 90  - byte 0xB8, 4 bytes with any value, byte 0x90
 ![](https://github.com/user-attachments/assets/4eb836a7-887f-4d27-a47e-8dd560a3cc86)
 
 ### 代码搜索
-进行代码搜索时将打开一个独立的指令填写界面，可以正常填写指令，也可以在某些操作数位置上留空，以搜索其余位置操作数符号条件的代码
+进行代码搜索时将打开一个独立的指令填写界面，可以正常填写指令，也可以在某些操作数位置上留空，以搜索其余位置操作数符合条件的代码
 ![](https://github.com/user-attachments/assets/183f7e9c-0a99-43ae-ab89-15b41f49985d)
 ![](https://github.com/user-attachments/assets/5df3324c-7d2f-42f1-899e-79535b786a35)
 

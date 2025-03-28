@@ -1,4 +1,5 @@
 import bisect
+from locale import currency
 
 import idc
 import idaapi
@@ -15,14 +16,13 @@ try:
     from fuzzywuzzy import fuzz
 except ImportError:
     fuzz = None
-# try:
-#     # import yara
-#     pass
-# except ImportError:
-#     yara = None
+try:
+    import yara
+except:
+    yara = None
 
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 class search_config_base():
     def __init__(self):
@@ -190,6 +190,21 @@ class code_search_config(search_config_base):
         return self._code_search_targets
 
 
+class yara_search_config(search_config_base):
+    def __init__(self):
+        super().__init__()
+        self._yara_search_rules = None
+
+    def set_rules_by_str(self, rules):
+        self._yara_search_rules = yara.compile(source=rules)
+
+    def set_rules_by_filepath(self, filepath):
+        self._yara_search_rules = yara.compile(filepath)
+
+    def get_rules(self):
+        return self._yara_search_rules
+
+
 class search_result_base:
     def __init__(self):
         self.icon = ""
@@ -286,6 +301,17 @@ class code_result(search_result_base):
             self.type = f"code from {func_name}"
         else:
             self.type = "code"
+
+class yara_result(search_result_base):
+    def __init__(self, match_rule:str, address:int, identifier:str, matched_data:str):
+        super().__init__()
+        self.match_rule = match_rule
+        self.address = address
+        self.identifier = identifier
+        self.matched_data = matched_data
+        self.detail = idc.generate_disasm_line(address,0)
+
+
 
 
 
@@ -519,6 +545,51 @@ class SearchManager():
         return search_result_list
 
 
+    @classmethod
+    def yara_search(cls, yara_search_config):
+        start, end = yara_search_config.get_range()
+    
+        def get_segment_list(start, end):
+            segment_list = []
+            current_addr = start
+            while(current_addr < end):
+                segment_end = idc.get_segm_attr(current_addr, idc.SEGATTR_END)
+                if(segment_end < end):
+                    segment_list.append((current_addr, segment_end))
+                else:
+                    segment_list.append((current_addr, end))
+                current_addr = ida_bytes.next_head(segment_end, end)
+            return segment_list
+        
+        yara_result_list = []
+
+        for segment in get_segment_list(start, end):
+            memory = idc.get_bytes(segment[0], segment[1] - segment[0])
+            rules = yara_search_config.get_rules()
+            matches = rules.match(data=memory)
+            if matches:
+                for match in matches:
+                    for string in match.strings:
+                        # for yara-python version < 4.0
+                        if isinstance(string, tuple):
+                            address = segment[0] + string[0]
+                            identifier = string[1]
+                            matched_data = string[2]
+
+                            yara_result_list.append(yara_result(match.rule, address, identifier, str(matched_data)))
+
+                        # for yara-python version >= 4.0
+                        elif isinstance(string, yara.StringMatch):
+                            instances = string.instances
+                            for instance in instances:
+                                address = segment[0] + instance.offset
+                                identifier = string.identifier
+                                matched_data = instance.matched_data
+                                yara_result_list.append(yara_result(match.rule, address, identifier, str(matched_data)))
+
+        return yara_result_list
+
+
 
 class SearchForm(idaapi.PluginForm):
     search_type = {
@@ -527,6 +598,8 @@ class SearchForm(idaapi.PluginForm):
         "Names": 2,
         "Assembly Code": 3,
     }
+    if(yara != None):
+        search_type["YARA Rule"] = 4
     search_range_start = ida_ida.inf_get_min_ea()
     search_range_end = ida_ida.inf_get_max_ea()
 
@@ -538,8 +611,8 @@ class SearchForm(idaapi.PluginForm):
     def InitUi(self):
         self.layout = QtWidgets.QVBoxLayout()
 
-        self.search_configure_box = self._search_configure_box_init()
         self.search_result_box = self._search_result_box_init()
+        self.search_configure_box = self._search_configure_box_init()
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.addWidget(self.search_configure_box)
@@ -661,6 +734,49 @@ class SearchForm(idaapi.PluginForm):
         self.search_code_box.setLayout(search_code_layout)
         SearchConfigureLayout.addWidget(self.search_code_box)
 
+        '''YARA rule box'''
+        self.yara_rule_box = QtWidgets.QGroupBox("YARA Rule")
+        yara_rule_layout = QtWidgets.QVBoxLayout()
+
+        self.yara_rule_edit = QtWidgets.QTextEdit()
+        self.yara_rule_edit.setAcceptRichText(False)
+        yara_rule_layout.addWidget(self.yara_rule_edit)
+
+
+
+
+        yara_rule_buttom_layout = QtWidgets.QHBoxLayout()
+        yara_rule_buttom_layout.addStretch(1)
+    
+        self.select_yara_rule_file_button = QtWidgets.QPushButton("Select YARA Rule File")
+        self.select_yara_rule_file_button.setMaximumWidth(400)
+        self.select_yara_rule_file_button.setMinimumWidth(200)
+        self.select_yara_rule_file_button.clicked.connect(self._select_yara_rule_file)
+        yara_rule_buttom_layout.addWidget(self.select_yara_rule_file_button)
+
+        self.clear_yara_rule_button = QtWidgets.QPushButton("Clear YARA Rule")
+        self.clear_yara_rule_button.setMaximumWidth(400)
+        self.clear_yara_rule_button.setMinimumWidth(200)
+        self.clear_yara_rule_button.clicked.connect(self.yara_rule_edit.clear)
+        yara_rule_buttom_layout.addWidget(self.clear_yara_rule_button)
+
+
+        yara_rule_buttom_layout.addStretch(1)
+        yara_rule_layout.addLayout(yara_rule_buttom_layout)
+
+
+
+        self.yara_rule_box.setLayout(yara_rule_layout)
+        SearchConfigureLayout.addWidget(self.yara_rule_box)
+
+
+
+
+
+
+
+
+
         """Configure"""
         self.advanced_configure_box = QtWidgets.QGroupBox("Advanced Configure:")
         advanced_configure_layout = QtWidgets.QVBoxLayout()
@@ -743,8 +859,7 @@ class SearchForm(idaapi.PluginForm):
         class SearchResultTree(QtWidgets.QTreeWidget):
             def __init__(self, parent = None):
                 super().__init__(parent)
-                self.setHeaderLabels(["","Address","Type","Detail"])
-                self.setColumnHidden(0,True)
+                self.set_default_header_labels()
                 self.setSelectionMode(QtWidgets.QTreeWidget.ExtendedSelection)
                 self.setIndentation(0)
                 self.setSortingEnabled(True)
@@ -791,6 +906,16 @@ class SearchForm(idaapi.PluginForm):
                     return
                 menu.exec_(event.globalPos())
 
+            def set_default_header_labels(self):
+                self.setHeaderLabels(["","Address","Type","Detail"])
+                self.setColumnHidden(0,True)
+                self.setColumnHidden(4,True)
+
+            def set_yara_header_labels(self):
+                self.setHeaderLabels(["Rule","Address","Identifier","Detail","matched_data"])
+                self.setColumnHidden(0,False)
+                self.setColumnHidden(4,False)
+
             def select_all_items(self):
                 self.selectAll()
 
@@ -821,11 +946,16 @@ class SearchForm(idaapi.PluginForm):
 
     def _on_search_type_changed(self, index):
         current_text = self.search_type_comboBox.itemText(index)
+        self.search_result_tree.clear()
 
         if self.search_type[current_text] == 0:
             self.search_keyword_box.show()
             self.advanced_configure_box.show()
+            self.case_sensitive_config.show()
+            self.bytes_search_config.show()
             self.search_code_box.hide()
+            self.yara_rule_box.hide()
+            self.search_result_tree.set_default_header_labels()
 
         elif self.search_type[current_text] == 1:
             self.search_keyword_box.show()
@@ -833,6 +963,9 @@ class SearchForm(idaapi.PluginForm):
             self.case_sensitive_config.hide()
             self.bytes_search_config.hide()
             self.search_code_box.hide()
+            self.yara_rule_box.hide()
+            self.search_result_tree.set_default_header_labels()
+
 
         elif self.search_type[current_text] == 2:
             self.search_keyword_box.show()
@@ -840,11 +973,24 @@ class SearchForm(idaapi.PluginForm):
             self.case_sensitive_config.hide()
             self.bytes_search_config.hide()
             self.search_code_box.hide()
+            self.yara_rule_box.hide()
+            self.search_result_tree.set_default_header_labels()
+
 
         elif self.search_type[current_text] == 3:
             self.search_keyword_box.hide()
             self.advanced_configure_box.hide()
             self.search_code_box.show()
+            self.yara_rule_box.hide()
+            self.search_result_tree.set_default_header_labels()
+
+
+        elif self.search_type[current_text] == 4:
+            self.search_keyword_box.hide()
+            self.advanced_configure_box.hide()
+            self.search_code_box.hide()
+            self.yara_rule_box.show()
+            self.search_result_tree.set_yara_header_labels()
 
 
     def _set_search_range(self, start: int = -1, end: int = -1):
@@ -892,6 +1038,18 @@ class SearchForm(idaapi.PluginForm):
             return
 
         self._set_search_range(target_segm.start_ea, target_segm.end_ea)
+
+    def _select_yara_rule_file(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(None, "Select YARA Rule File", "", "YARA Rule Files (*.yar);; All files (*)")
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    rule_file_str = file.read()
+                    self.yara_rule_edit.setText(rule_file_str)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(None, "Error", f"Failed to open file: {str(e)}")
+
+
 
 
     def _add_code_line(self):
@@ -1098,21 +1256,57 @@ Search: Add code
             search_results = SearchManager().assembly_code_search(search_config)
 
 
+        elif self.search_type_comboBox.currentIndex() == 4:
+            search_config = yara_search_config()
+            search_config.set_range(self.search_range_start, self.search_range_end)
+            try:
+                search_config.set_rules_by_str(self.yara_rule_edit.toPlainText())
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(None, "Error", f"Failed to compile rule: {str(e)}")
+                return
+            search_results = SearchManager().yara_search(search_config)
+
+
         if model == 0:
-            self.search_result_tree.clear()
-            for result in search_results:
-                item = QtWidgets.QTreeWidgetItem([
-                    result.icon,
-                    hex(result.address),
-                    result.type,
-                    result.detail
-                ])
-                self.search_result_tree.addTopLevelItem(item)
+            if self.search_type_comboBox.currentIndex() in [0,1,2,3]:
+                self.search_result_tree.clear()
+                for result in search_results:
+                    item = QtWidgets.QTreeWidgetItem([
+                        None,
+                        hex(result.address),
+                        result.type,
+                        result.detail
+                    ])
+                    self.search_result_tree.addTopLevelItem(item)
+            elif self.search_type_comboBox.currentIndex() == 4:
+                for result in search_results:
+                    item = QtWidgets.QTreeWidgetItem([
+                        result.match_rule,
+                        hex(result.address),
+                        result.identifier,
+                        result.detail,
+                        result.matched_data
+                    ])
+                    self.search_result_tree.addTopLevelItem(item)
+
         else:
-            if search_results:
+            if self.search_type_comboBox.currentIndex() in [0,1,2,3] and search_results:
                 target_addr = search_results[0].address
                 idaapi.jumpto(target_addr)
-
+            else:
+                target_addr = 0;
+                current_addr = idc.get_screen_ea()
+                if model == 1:
+                    for result in search_results:
+                        if result.address > idaapi.prev_head(current_addr,self.search_range_start):
+                            break
+                        target_addr = result.address
+                elif model == 2:
+                    for result in search_results:
+                        if result.address > current_addr:
+                            target_addr = idaapi.next_head(result.address,self.search_range_end)
+                            break
+                idaapi.jumpto(target_addr)
 
 
 
