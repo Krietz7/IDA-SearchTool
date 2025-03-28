@@ -1,5 +1,4 @@
 import bisect
-from locale import currency
 
 import idc
 import idaapi
@@ -11,6 +10,7 @@ import ida_strlist
 import ida_kernwin
 
 from PyQt5 import QtWidgets,QtCore
+from PyQt5.QtGui import QFont
 
 try:
     from fuzzywuzzy import fuzz
@@ -22,7 +22,10 @@ except:
     yara = None
 
 
-VERSION = "1.2"
+VERSION = "1.2.1"
+
+TEXTEDIT_FONT = "Consolas"
+TEXTEDIT_FONT_SIZE = 10
 
 class search_config_base():
     def __init__(self):
@@ -692,6 +695,7 @@ class SearchForm(idaapi.PluginForm):
         search_keyword_layout = QtWidgets.QVBoxLayout()
 
         self.search_keyword_edit = QtWidgets.QTextEdit()
+        self.search_keyword_edit.setFont(QFont(TEXTEDIT_FONT, TEXTEDIT_FONT_SIZE))
         self.search_keyword_edit.setAcceptRichText(False)
         search_keyword_layout.addWidget(self.search_keyword_edit)
 
@@ -739,6 +743,8 @@ class SearchForm(idaapi.PluginForm):
         yara_rule_layout = QtWidgets.QVBoxLayout()
 
         self.yara_rule_edit = QtWidgets.QTextEdit()
+        self.yara_rule_edit.setFont(QFont(TEXTEDIT_FONT, TEXTEDIT_FONT_SIZE))
+
         self.yara_rule_edit.setAcceptRichText(False)
         yara_rule_layout.addWidget(self.yara_rule_edit)
 
@@ -1279,6 +1285,7 @@ Search: Add code
                     ])
                     self.search_result_tree.addTopLevelItem(item)
             elif self.search_type_comboBox.currentIndex() == 4:
+                self.search_result_tree.clear()
                 for result in search_results:
                     item = QtWidgets.QTreeWidgetItem([
                         result.match_rule,
