@@ -1,5 +1,5 @@
 # IDA-Search Tool
-一个用于查找IDA数据库中不同类型数据的插件，支持搜索字节、注释、代码等不同类型的数据、支持搜索结果的复制导出。
+一个用于查找IDA数据库中不同类型数据的插件，支持搜索字节、注释、代码等不同类型的数据、支持yara规则检测，可以对搜索结果进行复制导出
 
 # 安装
 将`SearchTool.py`拷贝到IDA的插件文件夹即可。
@@ -7,6 +7,8 @@
 - IDA版本 >= 7.5(仅在IDA Pro 7.7版本完整测试过)
 - Python版本 >= 3.8
 - Python中需安装PyQt5模块
+- (可选) 安装fuzzywuzzy模块以启用模糊搜索功能
+- (可选) 安装yara-python模块以启用yara规则检测功能
 
 # 使用方法
 使用快捷键`Shift+F`打开插件窗口，或从工具栏的`Search/Search Tool`选项打开。
@@ -45,3 +47,6 @@ B8 ? ? ? ? 90  - byte 0xB8, 4 bytes with any value, byte 0x90
 
 搜索代码片段
 ![](https://github.com/user-attachments/assets/9fb11566-a948-4369-b512-2c6349e36238)
+
+### yara规则搜索
+![](https://github.com/user-attachments/assets/ea5620b6-2a95-4ee6-a19b-f932a4deb01f)
