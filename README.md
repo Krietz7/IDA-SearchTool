@@ -1,8 +1,7 @@
 # IDA-Search Tool
 [中文](README.zh_CN.md)
 
-a IDA python plugin to search different types of data in IDA databases, supports searching for different types of data such as bytes, comments, codes, etc., and supports copying and export of search results.
-
+a IDA python plugin to search different types of data in IDA databases, supports searching for different types of data such as bytes, comments, codes, etc., supports yara rule detection, and can copy and export search results.
 
 # Installation
 Copy `SearchTool.py` to IDA plugins directory.
@@ -10,6 +9,8 @@ Copy `SearchTool.py` to IDA plugins directory.
 - IDA version >= 7.5(Only fully tested in IDA Pro 7.7)
 - Python version >= 3.8
 - PyQt5 module needs to be installed in Python
+- (Optional) Install the fuzzywuzzy module to enable the fuzzy search function
+- (Optional) Install the yara-python module to enable the yara rule detection function
 
 # Usage
 Use the hotkey `Shift+F` to open the plugin window, or open it from the `Search/Search Tool` option in the toolbar.
@@ -48,7 +49,8 @@ When searching for code, an independent instruction filling interface will be op
 #### Search for code snippet
 ![](https://github.com/user-attachments/assets/9fb11566-a948-4369-b512-2c6349e36238)
 
-
+### Yara rule detection
+![](https://github.com/user-attachments/assets/ea5620b6-2a95-4ee6-a19b-f932a4deb01f)
 
 
 
