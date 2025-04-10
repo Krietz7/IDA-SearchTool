@@ -603,13 +603,17 @@ class SearchForm(idaapi.PluginForm):
     }
     if(yara != None):
         search_type["YARA Rule"] = 4
-    search_range_start = ida_ida.inf_get_min_ea()
-    search_range_end = ida_ida.inf_get_max_ea()
+    search_range_start = 0
+    search_range_end = 0
 
 
     def OnCreate(self, form):
         self.parent = self.FormToPyQtWidget(form)
+        search_range_start = ida_ida.inf_get_min_ea()
+        search_range_end = ida_ida.inf_get_max_ea()
         self.InitUi()
+
+        self._set_search_range(search_range_start,search_range_end)
 
     def InitUi(self):
         self.layout = QtWidgets.QVBoxLayout()
