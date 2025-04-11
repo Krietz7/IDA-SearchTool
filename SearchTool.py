@@ -1,4 +1,5 @@
 import bisect
+from re import search
 
 import idc
 import idaapi
@@ -22,7 +23,7 @@ except:
     yara = None
 
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 TEXTEDIT_FONT = "Consolas"
 TEXTEDIT_FONT_SIZE = 10
@@ -796,11 +797,23 @@ class SearchForm(idaapi.PluginForm):
         advanced_configure_layout.addWidget(self.case_sensitive_config)
         self.bytes_search_config = QtWidgets.QCheckBox("Bytes Search")
         advanced_configure_layout.addWidget(self.bytes_search_config)
+        self.addr_search_config = QtWidgets.QCheckBox("Addr Search")
+        advanced_configure_layout.addWidget(self.addr_search_config)
         self.fuzzy_search_config = QtWidgets.QCheckBox("Fuzzy Search")
         advanced_configure_layout.addWidget(self.fuzzy_search_config)
         if(fuzz == None):
             self.fuzzy_search_config.hide()
 
+        def addr_search_set_checkbox():
+            if self.addr_search_config.isChecked():
+                self.case_sensitive_config.setDisabled(True)
+                self.bytes_search_config.setDisabled(True)
+                self.fuzzy_search_config.setDisabled(True)
+            else:
+                self.case_sensitive_config.setDisabled(False)
+                self.bytes_search_config.setDisabled(False)
+                self.fuzzy_search_config.setDisabled(False)
+        self.addr_search_config.stateChanged.connect(addr_search_set_checkbox)
 
         fuzzy_search_slider_label = QtWidgets.QLabel("fuzzy search match level:")
         fuzzy_search_slider_label.setVisible(False) 
@@ -963,6 +976,7 @@ class SearchForm(idaapi.PluginForm):
             self.advanced_configure_box.show()
             self.case_sensitive_config.show()
             self.bytes_search_config.show()
+            self.addr_search_config.show()
             self.search_code_box.hide()
             self.yara_rule_box.hide()
             self.search_result_tree.set_default_header_labels()
@@ -972,6 +986,7 @@ class SearchForm(idaapi.PluginForm):
             self.advanced_configure_box.show()
             self.case_sensitive_config.hide()
             self.bytes_search_config.hide()
+            self.addr_search_config.hide()
             self.search_code_box.hide()
             self.yara_rule_box.hide()
             self.search_result_tree.set_default_header_labels()
@@ -982,6 +997,7 @@ class SearchForm(idaapi.PluginForm):
             self.advanced_configure_box.show()
             self.case_sensitive_config.hide()
             self.bytes_search_config.hide()
+            self.addr_search_config.hide()
             self.search_code_box.hide()
             self.yara_rule_box.hide()
             self.search_result_tree.set_default_header_labels()
@@ -1203,8 +1219,41 @@ Search: Add code
 
         return assembly_codes
 
+    @staticmethod
+    def _string_to_address(s):
+        try:
+            s = s.strip()
+            s_lower = s.lower()
+            if s_lower.startswith('0x'):
+                num = int(s, 16)
+            else:
+                has_hex = any(c in 'abcdef' for c in s_lower)
+                if has_hex:
+                    num = int(s, 16)
+                else:
+                    num = int(s)
+        except ValueError:
+            return ''
 
+        inf = idaapi.get_inf_structure()
+        if inf.is_64bit():
+            max_val = 0xFFFFFFFFFFFFFFFF
+            byte_len = 8
+        elif inf.is_32bit():
+            max_val = 0xFFFFFFFF
+            byte_len = 4
+        else:
+            return ''
 
+        if num < 0 or num > max_val:
+            return ''
+        byteorder = 'big' if inf.is_be() else 'little'
+        
+        addr_bytes = num.to_bytes(byte_len, byteorder)
+        s = ""
+        for byte in addr_bytes:
+            s += hex(byte)[2:] + " "
+        return s
 
     """
     Search Function
@@ -1224,9 +1273,15 @@ Search: Add code
                 search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
             elif model == 2:
                 search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
-            search_config.set_keyword(self.search_keyword_edit.toPlainText())
-            search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
-            search_config.set_bytes_search( self.bytes_search_config.isChecked())
+            if self.addr_search_config.isChecked():
+                search_addr = self.search_keyword_edit.toPlainText()
+                search_config.set_keyword(self._string_to_address(search_addr))
+                search_config.set_case_sensitive(True)
+                search_config.set_bytes_search(True)
+            else:
+                search_config.set_keyword(self.search_keyword_edit.toPlainText())
+                search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
+                search_config.set_bytes_search( self.bytes_search_config.isChecked())
             search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
             search_results = SearchManager().bytes_search(search_config)
 
