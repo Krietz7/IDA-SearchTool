@@ -1364,13 +1364,13 @@ Search: Add code
                 current_addr = idc.get_screen_ea()
                 if model == 1:
                     for result in search_results:
-                        if result.address > idaapi.prev_head(current_addr,self.search_range_start):
+                        if result.address >= current_addr:
                             break
                         target_addr = result.address
                 elif model == 2:
                     for result in search_results:
-                        if result.address > current_addr:
-                            target_addr = idaapi.next_head(result.address,self.search_range_end)
+                        if result.address >= current_addr + idc.get_item_size(current_addr):
+                            target_addr = result.address
                             break
                 idaapi.jumpto(target_addr)
 
