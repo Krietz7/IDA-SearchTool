@@ -1,5 +1,4 @@
 import bisect
-from re import search
 
 import idc
 import idaapi
@@ -361,6 +360,9 @@ class SearchManager():
         ea = start
         search_result_list = []
         while ea < end:
+            if ida_kernwin.user_cancelled():
+                break
+
             ea = ida_bytes.bin_search(ea, end, patterns, flag)
             if ea == idaapi.BADADDR:
                 break
@@ -431,6 +433,9 @@ class SearchManager():
         search_result_list = []
         ea = start
         while ea < end:
+            if ida_kernwin.user_cancelled():
+                break
+
             line = ida_lines.generate_disasm_line(ea,ida_lines.GENDSM_FORCE_CODE)
             cmt_idx, cmt_type = find_comment(line)
             if cmt_idx != -1:
@@ -541,6 +546,9 @@ class SearchManager():
         ea = start
         search_result_list = []
         while ea < end:
+            if ida_kernwin.user_cancelled():
+                break
+
             if find_code_snippet(ea, code_search_targets, end):
                 search_result_list.append(code_result(ea))
             ea = ida_bytes.next_head(ea, end)
@@ -1266,70 +1274,79 @@ Search: Add code
         self._set_search_range(-1,-1)
         search_results =[]
         ea = idaapi.get_screen_ea()
-        if self.search_type_comboBox.currentIndex() == 0:
-            search_config = data_search_config()
-            search_config.set_range(self.search_range_start, self.search_range_end)
-            if model == 1:
-                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
-            elif model == 2:
-                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
-            if self.addr_search_config.isChecked():
-                search_addr = self.search_keyword_edit.toPlainText()
-                search_config.set_keyword(self._string_to_address(search_addr))
-                search_config.set_case_sensitive(True)
-                search_config.set_bytes_search(True)
-            else:
+
+        if model == 0 and self.search_type_comboBox.currentIndex() in [0,1,3]:
+            idaapi.show_wait_box("Searching, Please Wait...")
+        try:
+
+            if self.search_type_comboBox.currentIndex() == 0:
+                search_config = data_search_config()
+                search_config.set_range(self.search_range_start, self.search_range_end)
+                if model == 1:
+                    search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
+                elif model == 2:
+                    search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
+                if self.addr_search_config.isChecked():
+                    search_addr = self.search_keyword_edit.toPlainText()
+                    search_config.set_keyword(self._string_to_address(search_addr))
+                    search_config.set_case_sensitive(True)
+                    search_config.set_bytes_search(True)
+                else:
+                    search_config.set_keyword(self.search_keyword_edit.toPlainText())
+                    search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
+                    search_config.set_bytes_search( self.bytes_search_config.isChecked())
+                search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
+                search_results = SearchManager().bytes_search(search_config)
+
+
+            elif self.search_type_comboBox.currentIndex() == 1:
+                search_config = comments_search_config()
+                search_config.set_range(self.search_range_start, self.search_range_end)
+                if model == 1:
+                    search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
+                elif model == 2:
+                    search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
                 search_config.set_keyword(self.search_keyword_edit.toPlainText())
-                search_config.set_case_sensitive( self.case_sensitive_config.isChecked())
-                search_config.set_bytes_search( self.bytes_search_config.isChecked())
-            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
-            search_results = SearchManager().bytes_search(search_config)
+                search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
+                search_results = SearchManager().comments_search(search_config)
 
 
-        elif self.search_type_comboBox.currentIndex() == 1:
-            search_config = comments_search_config()
-            search_config.set_range(self.search_range_start, self.search_range_end)
-            if model == 1:
-                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
-            elif model == 2:
-                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
-            search_config.set_keyword(self.search_keyword_edit.toPlainText())
-            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
-            search_results = SearchManager().comments_search(search_config)
+            elif self.search_type_comboBox.currentIndex() == 2:
+                search_config = names_search_config()
+                search_config.set_range(self.search_range_start, self.search_range_end)
+                if model == 1:
+                    search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
+                elif model == 2:
+                    search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_keyword(self.search_keyword_edit.toPlainText())
+                search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
+                search_results = SearchManager().names_search(search_config)
 
 
-        elif self.search_type_comboBox.currentIndex() == 2:
-            search_config = names_search_config()
-            search_config.set_range(self.search_range_start, self.search_range_end)
-            if model == 1:
-                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
-            elif model == 2:
-                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
-            search_config.set_keyword(self.search_keyword_edit.toPlainText())
-            search_config.set_fuzzy(self.fuzzy_search_config.isChecked(), self.fuzzy_search_slider.value())
-            search_results = SearchManager().names_search(search_config)
+            elif self.search_type_comboBox.currentIndex() == 3:
+                search_config = code_search_config()
+                search_config.set_range(self.search_range_start, self.search_range_end)
+                if model == 1:
+                    search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
+                elif model == 2:
+                    search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
+                search_config.set_code_search_target(self.extract_assembly_code_lines())
+                search_results = SearchManager().assembly_code_search(search_config)
 
 
-        elif self.search_type_comboBox.currentIndex() == 3:
-            search_config = code_search_config()
-            search_config.set_range(self.search_range_start, self.search_range_end)
-            if model == 1:
-                search_config.set_search_once(idc.prev_head(ea,self.search_range_start),ida_bytes.BIN_SEARCH_BACKWARD)
-            elif model == 2:
-                search_config.set_search_once(idc.next_head(ea,self.search_range_end),ida_bytes.BIN_SEARCH_FORWARD)
-            search_config.set_code_search_target(self.extract_assembly_code_lines())
-            search_results = SearchManager().assembly_code_search(search_config)
+            elif self.search_type_comboBox.currentIndex() == 4:
+                search_config = yara_search_config()
+                search_config.set_range(self.search_range_start, self.search_range_end)
+                try:
+                    search_config.set_rules_by_str(self.yara_rule_edit.toPlainText())
+                except Exception as e:
+                    QtWidgets.QMessageBox.warning(None, "Error", f"Failed to compile rule: {str(e)}")
+                    return
+                search_results = SearchManager().yara_search(search_config)
 
+        finally:
+            idaapi.hide_wait_box()
 
-        elif self.search_type_comboBox.currentIndex() == 4:
-            search_config = yara_search_config()
-            search_config.set_range(self.search_range_start, self.search_range_end)
-            try:
-                search_config.set_rules_by_str(self.yara_rule_edit.toPlainText())
-            except Exception as e:
-                QtWidgets.QMessageBox.warning(None, "Error", f"Failed to compile rule: {str(e)}")
-                return
-            search_results = SearchManager().yara_search(search_config)
 
 
         if model == 0:
