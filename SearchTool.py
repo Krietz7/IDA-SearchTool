@@ -22,7 +22,7 @@ except:
     yara = None
 
 
-VERSION = "1.2.2"
+VERSION = "1.2.4"
 
 TEXTEDIT_FONT = "Consolas"
 TEXTEDIT_FONT_SIZE = 10
@@ -812,22 +812,9 @@ class SearchForm(idaapi.PluginForm):
         if(fuzz == None):
             self.fuzzy_search_config.hide()
 
-        def addr_search_set_checkbox():
-            if self.addr_search_config.isChecked():
-                self.case_sensitive_config.setDisabled(True)
-                self.bytes_search_config.setDisabled(True)
-                self.fuzzy_search_config.setDisabled(True)
-            else:
-                self.case_sensitive_config.setDisabled(False)
-                self.bytes_search_config.setDisabled(False)
-                self.fuzzy_search_config.setDisabled(False)
-        self.addr_search_config.stateChanged.connect(addr_search_set_checkbox)
-
         fuzzy_search_slider_label = QtWidgets.QLabel("fuzzy search match level:")
         fuzzy_search_slider_label.setVisible(False) 
         advanced_configure_layout.addWidget(fuzzy_search_slider_label)
-        self.fuzzy_search_config.stateChanged.connect(
-            lambda state: fuzzy_search_slider_label.setVisible(state == QtCore.Qt.Checked))
 
         self.fuzzy_search_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.fuzzy_search_slider.setRange(1, 100)
@@ -835,9 +822,6 @@ class SearchForm(idaapi.PluginForm):
         self.fuzzy_search_slider.setVisible(False)
         self.fuzzy_search_slider.setMaximumWidth(300)
         advanced_configure_layout.addWidget(self.fuzzy_search_slider)
-        self.fuzzy_search_config.stateChanged.connect(
-            lambda state: self.fuzzy_search_slider.setVisible(state == QtCore.Qt.Checked))
-
 
         self.advanced_configure_box.setLayout(advanced_configure_layout)
         SearchConfigureLayout.addWidget(self.advanced_configure_box)
@@ -858,16 +842,16 @@ class SearchForm(idaapi.PluginForm):
         search_all_button.setMinimumWidth(200)
         search_button_layout.addWidget(search_all_button)
 
-        search_next_button = QtWidgets.QPushButton("Search Previous")
-        search_next_button.clicked.connect(lambda: self._start_search(1))
-        search_next_button.setMinimumWidth(200)
-        search_button_layout.addWidget(search_next_button)
-
-
-        search_previous_button = QtWidgets.QPushButton("Search Next")
-        search_previous_button.clicked.connect(lambda: self._start_search(2))
+        search_previous_button = QtWidgets.QPushButton("Search Previous")
+        search_previous_button.clicked.connect(lambda: self._start_search(1))
         search_previous_button.setMinimumWidth(200)
         search_button_layout.addWidget(search_previous_button)
+
+
+        search_next_button = QtWidgets.QPushButton("Search Next")
+        search_next_button.clicked.connect(lambda: self._start_search(2))
+        search_next_button.setMinimumWidth(200)
+        search_button_layout.addWidget(search_next_button)
 
         search_button_layout.addStretch(1)
         search_button_box.setLayout(search_button_layout)
@@ -877,6 +861,50 @@ class SearchForm(idaapi.PluginForm):
         self.search_type_comboBox.currentIndexChanged.connect(self._on_search_type_changed)
         self._on_search_type_changed(0)
         self.SearchConfigureBox.setLayout(SearchConfigureLayout)
+
+
+        def addr_search_set_checkbox(set_enable):
+            if not self.addr_search_config.isChecked() or set_enable:
+                self.case_sensitive_config.setDisabled(False)
+                self.bytes_search_config.setDisabled(False)
+                self.fuzzy_search_config.setDisabled(False)
+            else:
+                self.case_sensitive_config.setDisabled(True)
+                self.case_sensitive_config.setChecked(False)
+                self.bytes_search_config.setDisabled(True)
+                self.bytes_search_config.setChecked(False)
+                self.fuzzy_search_config.setDisabled(True)
+                self.fuzzy_search_config.setChecked(False)
+
+
+        self.addr_search_config.stateChanged.connect(
+            lambda : addr_search_set_checkbox(False))
+        self.search_type_comboBox.currentIndexChanged.connect(
+            lambda : addr_search_set_checkbox(
+                self.search_type_comboBox.currentIndex() != self.search_type["Data"]))
+
+        def fuzzy_search_set_button(set_enable):
+            if not self.fuzzy_search_config.isChecked() or set_enable:
+                search_previous_button.setDisabled(False)
+                search_next_button.setDisabled(False)
+            else:
+                search_previous_button.setDisabled(True)
+                search_next_button.setDisabled(True)
+
+        self.fuzzy_search_config.stateChanged.connect(
+            lambda state: fuzzy_search_slider_label.setVisible(state == QtCore.Qt.Checked))
+        self.fuzzy_search_config.stateChanged.connect(
+            lambda state: self.fuzzy_search_slider.setVisible(state == QtCore.Qt.Checked))
+
+        self.fuzzy_search_config.stateChanged.connect(
+            lambda : fuzzy_search_set_button(
+                self.search_type_comboBox.currentIndex() != self.search_type["Data"]))
+        self.search_type_comboBox.currentIndexChanged.connect(
+            lambda : fuzzy_search_set_button(
+                self.search_type_comboBox.currentIndex() != self.search_type["Data"]))
+
+
+
         return self.SearchConfigureBox
 
     def _search_result_box_init(self):
