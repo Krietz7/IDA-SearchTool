@@ -22,7 +22,7 @@ except:
     yara = None
 
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 
 TEXTEDIT_FONT = "Consolas"
 TEXTEDIT_FONT_SIZE = 10
@@ -349,8 +349,10 @@ class SearchManager():
                 start = current_addr
             else:
                 end = current_addr
-
-            addr = ida_bytes.bin_search(start, end, patterns, flag)
+            if idaapi.IDA_SDK_VERSION >= 910:
+                addr,_ = ida_bytes.bin_search(start, end, patterns, flag)
+            else:
+                addr = ida_bytes.bin_search(start, end, patterns, flag)
             if addr == idaapi.BADADDR:
                 return []
             return [hex_data_result(addr)]
@@ -362,8 +364,10 @@ class SearchManager():
         while ea < end:
             if ida_kernwin.user_cancelled():
                 break
-
-            ea = ida_bytes.bin_search(ea, end, patterns, flag)
+            if idaapi.IDA_SDK_VERSION >= 910:
+                ea,_ = ida_bytes.bin_search(ea, end, patterns, flag)
+            else:
+                ea = ida_bytes.bin_search(ea, end, patterns, flag)
             if ea == idaapi.BADADDR:
                 break
             search_result_list.append(hex_data_result(ea))
